@@ -199,7 +199,7 @@ export const LoginPage: React.FC = () => {
 
             <div className="mt-7 flex items-center gap-2 border-t border-white/10 pt-5 text-[11px] text-slate-500">
               <ShieldCheck className="h-3.5 w-3.5 text-cyan-400/70" />
-              <span>Sesi diamankan Firebase Authentication</span>
+              <span>Berdoa sebelum Bekerja</span>
             </div>
           </div>
 
