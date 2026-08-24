@@ -1,0 +1,82 @@
+{
+  "theme": "dark",
+  "typography": {
+    "headings": "Outfit",
+    "body": "Plus Jakarta Sans",
+    "pairing_strategy": "Outfit for headings (modern, tech, premium), Plus Jakarta Sans for body (excellent legibility for data tables, metrics, and Indonesian language).",
+    "scale": {
+      "h1": "text-4xl tracking-tight font-semibold",
+      "h2": "text-2xl tracking-tight font-semibold",
+      "h3": "text-xl font-medium",
+      "body": "text-sm text-slate-300",
+      "labels": "text-xs font-semibold tracking-[0.15em] uppercase text-slate-400"
+    }
+  },
+  "colors": {
+    "background": "#070B14",
+    "surface": "#111623",
+    "surface_hover": "#1A2235",
+    "border": "rgba(255, 255, 255, 0.08)",
+    "primary": "#00E5FF",
+    "primary_glow": "rgba(0, 229, 255, 0.3)",
+    "text_primary": "#F8FAFC",
+    "text_secondary": "#94A3B8",
+    "success": "#10B981",
+    "danger": "#EF4444",
+    "warning": "#F59E0B"
+  },
+  "visual_enhancers": {
+    "borders": "1px solid border-white/10 for cards to create structure without visual clutter.",
+    "glow_effects": "Subtle neon cyan box-shadow for primary buttons and active states (e.g., shadow-[0_0_15px_rgba(0,229,255,0.2)]).",
+    "glassmorphism": "Used only for sticky topbar/navbar and modals: backdrop-blur-xl bg-[#070B14]/70 border-b border-white/10."
+  },
+  "layouts": {
+    "app_shell": "Persistent left sidebar (collapsible, w-64 expanded, w-20 collapsed, mobile drawer). Sticky top header for contextual actions, page title, and user profile.",
+    "dashboard_grid": "Dense bento grid style for dashboard widgets. Use gap-4 or gap-6. Direct children of grid.",
+    "page_container": "p-4 md:p-6 lg:p-8 max-w-[1600px] mx-auto w-full."
+  },
+  "components": {
+    "sidebar": "Darker than surface or matching background (bg-[#070B14]). Active menu item gets primary text color, primary-tinted background (bg-primary/10), and a left vertical 2px solid primary indicator.",
+    "topbar": "Glassmorphic sticky header (z-50). Must not be fully transparent. Contains global date/month filter, notifications, and profile.",
+    "cards": "bg-[#111623] rounded-xl border border-white/10 overflow-hidden. No heavy shadows in dark mode.",
+    "data_table": "Dense data tables. Wrapper: overflow-x-auto rounded-lg border border-white/10. Table: w-full text-sm left-align. th: text-xs uppercase tracking-wider text-slate-400 bg-[#070B14] py-3 px-4 font-medium. tr: border-b border-white/5 hover:bg-white/[0.02] transition-colors. td: py-3 px-4 align-middle.",
+    "tabs": "Specific to Data Omset: Flex container, p-1 bg-[#070B14] rounded-lg inline-flex border border-white/10. Tab items: px-6 py-2.5 rounded-md text-sm font-medium transition-all. Active state: bg-[#111623] text-primary shadow-sm. Inactive state: text-slate-400 hover:text-slate-200.",
+    "buttons": {
+      "primary": "bg-primary text-[#070B14] font-semibold rounded-lg px-4 py-2 hover:bg-[#33EAFF] transition-colors shadow-[0_0_12px_rgba(0,229,255,0.2)]",
+      "secondary": "bg-transparent border border-white/10 text-white hover:bg-white/5 rounded-lg px-4 py-2 transition-colors",
+      "danger": "bg-red-500/10 border border-red-500/20 text-red-500 hover:bg-red-500/20 rounded-lg px-4 py-2 transition-colors"
+    },
+    "inputs": "bg-[#070B14] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all w-full.",
+    "modals": "Framer-motion powered. Backdrop: bg-black/60 backdrop-blur-sm z-50. Modal Content: bg-[#111623] border border-white/10 rounded-2xl shadow-2xl p-6 relative."
+  },
+  "motion": {
+    "page_transitions": "Framer motion on main content: initial={opacity:0, y:10} animate={opacity:1, y:0} exit={opacity:0, y:-10} transition={duration:0.2, ease:'easeOut'}",
+    "modals": "Backdrop: initial={opacity:0} animate={opacity:1}. Modal: initial={opacity:0, scale:0.95} animate={opacity:1, scale:1} transition={duration:0.2, type:'spring', bounce:0}",
+    "hover_states": "Buttons use transition-colors. Avoid heavy scale transforms on dense ERP interfaces; prioritize color shifts."
+  },
+  "accessibility": {
+    "contrast": "Ensure primary text meets 4.5:1 ratio against surface. Cyan #00E5FF against #070B14 is highly accessible.",
+    "focus": "All interactive elements must have focus-visible ring (focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-[#070B14]).",
+    "test_ids": "Mandatory data-testid attributes on all interactive elements in kebab-case (e.g., data-testid='tab-data-gmv', data-testid='login-submit-button')."
+  },
+  "media": {
+    "logo": "https://customer-assets-lqy194kg.emergentagent.net/job_kdrt-management/artifacts/8du6rqmp_download%20%287%29.png"
+  },
+  "specific_instructions": {
+    "data_omset_page": "Implement a single page for 'Data Omset' with a prominent tab switcher for [ DATA GMV ] and [ KOMISI REAL ]. Do not create separate sidebar menus for these. They share the same route, state switches the view.",
+    "logo_usage": "Login page: Display the full provided asset prominently. Sidebar/Header: Render the text 'PT.KDRT' in the Outfit font, styled as chrome/neon or simply a crisp white/cyan text, rather than just using the brain icon alone. The user explicitly requested: 'untuk di ikon jangan hanya brainnya tapi tulisan PT.KDRT nya untuk sidebar/header'.",
+    "tech_stack": "React 19, Vite, Tailwind v4, lucide-react, framer-motion. You have .js files (using JSX syntax), do NOT use .tsx or TypeScript files. Build custom components using Tailwind CSS; DO NOT use shadcn/ui.",
+    "language": "All labels, menus, and text must be in Bahasa Indonesia as requested."
+  },
+  "universal_guidelines_for_main_agent": [
+    "Create depth through layered design elements with z-index hierarchy, using background color shifts (surface layers) instead of drop shadows in dark mode.",
+    "Avoid generic centered layouts, simplistic gradients, and uniform styling.",
+    "DO NOT use a completely transparent background in the header, overlays, or any surface that has content scrolling under it.",
+    "All interactive elements must include a data-testid attribute.",
+    "Do NOT apply universal transitions (e.g., transition: all). Target specific properties like transition-colors, transition-transform.",
+    "Do NOT use emoji characters (🤖🧠). Use lucide-react icons exclusively.",
+    "Keep text left-aligned for data density; only center-align empty states or specific modal content.",
+    "Do not use generic blue/purple AI slop gradients. Stick to the sharp, premium Neon Cyan (#00E5FF) on Void Navy (#070B14) aesthetic.",
+    "You have .js files not .tsx file, so strictly write React components in .js files."
+  ]
+}

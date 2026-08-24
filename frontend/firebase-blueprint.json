@@ -1,0 +1,262 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Profil pengguna dan role hak akses aplikasi",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "MANAGER", "EMPLOYEE", "INVESTOR"] },
+        "active": { "type": "boolean" },
+        "employeeId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Data profil kepegawaian PT.KDRT",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "nickname": { "type": "string" },
+        "position": { "type": "string" },
+        "appRole": { "type": "string", "enum": ["OWNER", "MANAGER", "EMPLOYEE", "INVESTOR"] },
+        "scope": { "type": "string", "enum": ["SHARING", "PRIBADI"] },
+        "baseSalary": { "type": "number" },
+        "startDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "userId": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "position", "baseSalary", "startDate", "active"]
+    },
+    "FinancialTransaction": {
+      "title": "FinancialTransaction",
+      "description": "Buku kas master mutasi transaksi keuangan uang masuk dan keluar PT.KDRT",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE"] },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "category": { "type": "string" },
+        "scope": { "type": "string", "enum": ["PRIBADI", "SHARING"] },
+        "sourceType": { "type": "string" },
+        "referenceId": { "type": "string" },
+        "accountId": { "type": "string" },
+        "accountName": { "type": "string" },
+        "gmv": { "type": "number" },
+        "estimatedCommission": { "type": "number" },
+        "realCommission": { "type": "number" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "payrollId": { "type": "string" },
+        "sampleId": { "type": "string" },
+        "productId": { "type": "string" },
+        "inventoryId": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "description": { "type": "string" },
+        "attachmentUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "VOID"] },
+        "voidReason": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["type", "amount", "date", "category", "scope", "status", "createdBy"]
+    },
+    "FinancialReconciliation": {
+      "title": "FinancialReconciliation",
+      "description": "Catatan rekonsiliasi perbandingan saldo kas sistem vs saldo aktual",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "periodLabel": { "type": "string" },
+        "scope": { "type": "string" },
+        "systemBalance": { "type": "number" },
+        "actualBalance": { "type": "number" },
+        "difference": { "type": "number" },
+        "accountName": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["date", "periodLabel", "systemBalance", "actualBalance", "accountName", "createdBy"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Catatan riwayat audit tindakan Owner dan sistem",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "target": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["userId", "action", "target"]
+    },
+    "ProfitSharingTier": {
+      "title": "ProfitSharingTier",
+      "description": "Konfigurasi tier bagi hasil sharing PT.KDRT",
+      "type": "object",
+      "properties": {
+        "tierId": { "type": "string" },
+        "name": { "type": "string" },
+        "minIncome": { "type": "number" },
+        "maxIncome": { "type": "number" },
+        "investorPercentage": { "type": "number" },
+        "ownerPercentage": { "type": "number" },
+        "talentPercentage": { "type": "number" },
+        "editorPercentage": { "type": "number" },
+        "companyBudgetPercentage": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["name", "minIncome", "investorPercentage", "ownerPercentage", "isActive"]
+    },
+    "ProfitSharingSettlement": {
+      "title": "ProfitSharingSettlement",
+      "description": "Rekap settlement bagi hasil bulanan kategori Sharing",
+      "type": "object",
+      "properties": {
+        "settlementId": { "type": "string" },
+        "periodStart": { "type": "string" },
+        "periodEnd": { "type": "string" },
+        "year": { "type": "number" },
+        "month": { "type": "string" },
+        "scope": { "type": "string" },
+        "totalIncome": { "type": "number" },
+        "totalExpense": { "type": "number" },
+        "netProfit": { "type": "number" },
+        "activeTierName": { "type": "string" },
+        "investorPercentage": { "type": "number" },
+        "ownerPercentage": { "type": "number" },
+        "talentPercentage": { "type": "number" },
+        "editorPercentage": { "type": "number" },
+        "companyBudgetPercentage": { "type": "number" },
+        "investorAmount": { "type": "number" },
+        "ownerAmount": { "type": "number" },
+        "talentAmount": { "type": "number" },
+        "editorAmount": { "type": "number" },
+        "companyBudgetAmount": { "type": "number" },
+        "totalPaidToInvestor": { "type": "number" },
+        "remainingInvestorObligation": { "type": "number" },
+        "status": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["settlementId", "year", "month", "scope", "totalIncome", "investorAmount", "ownerAmount", "status", "createdBy"]
+    },
+    "InvestorWithdrawal": {
+      "title": "InvestorWithdrawal",
+      "description": "Catatan pembayaran atau penarikan hak bagi hasil investor",
+      "type": "object",
+      "properties": {
+        "settlementId": { "type": "string" },
+        "investorName": { "type": "string" },
+        "date": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["settlementId", "investorName", "date", "amount", "status", "createdBy"]
+    },
+    "WeeklyCommission": {
+      "title": "WeeklyCommission",
+      "description": "Pencatatan komisi mingguan dari akun atau seller TikTok oleh Owner",
+      "type": "object",
+      "properties": {
+        "periodWeek": { "type": "string" },
+        "accountName": { "type": "string" },
+        "sellerName": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "notes": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["periodWeek", "accountName", "amount", "date", "createdBy"]
+    },
+    "EmployeeCommission": {
+      "title": "EmployeeCommission",
+      "description": "Pencatatan komisi khusus karyawan berdasarkan performa/target oleh Owner",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "period": { "type": "string" },
+        "amount": { "type": "number" },
+        "basis": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["BELUM DIBAYAR", "SUDAH DIBAYAR"] },
+        "paymentDate": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["employeeId", "employeeName", "period", "amount", "basis", "status", "createdBy"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Koleksi akun profil pengguna"
+    },
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Koleksi file data karyawan"
+    },
+    "/weeklyCommissions/{commissionId}": {
+      "schema": "WeeklyCommission",
+      "description": "Koleksi komisi mingguan input manual Owner"
+    },
+    "/employeeCommissions/{empCommId}": {
+      "schema": "EmployeeCommission",
+      "description": "Koleksi komisi karyawan input manual Owner"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "FinancialTransaction",
+      "description": "Buku kas master mutasi transaksi keuangan uang masuk dan uang keluar"
+    },
+    "/reconciliations/{reconciliationId}": {
+      "schema": "FinancialReconciliation",
+      "description": "Catatan rekonsiliasi kas sistem vs aktual"
+    },
+    "/profitSharingTiers/{tierId}": {
+      "schema": "ProfitSharingTier",
+      "description": "Konfigurasi tier formula bagi hasil"
+    },
+    "/profitSharingSettlements/{settlementId}": {
+      "schema": "ProfitSharingSettlement",
+      "description": "Rekap settlement bulanan profit sharing"
+    },
+    "/withdrawals/{withdrawalId}": {
+      "schema": "InvestorWithdrawal",
+      "description": "Catatan pencairan dana bagi hasil investor"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "FinancialTransaction",
+      "description": "Koleksi pengeluaran (legacy compatibility)"
+    },
+    "/dailyPerformance/{performanceId}": {
+      "schema": "FinancialTransaction",
+      "description": "Koleksi rekapan performa harian TikTok"
+    },
+    "/auditLogs/{auditId}": {
+      "schema": "AuditLog",
+      "description": "Koleksi catatan audit log"
+    }
+  }
+}

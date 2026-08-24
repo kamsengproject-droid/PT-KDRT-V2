@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800">
+  <defs>
+    <radialGradient id="bgGrad" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#0e2338" />
+      <stop offset="40%" stop-color="#0a1524" />
+      <stop offset="80%" stop-color="#050a12" />
+      <stop offset="100%" stop-color="#020509" />
+    </radialGradient>
+    <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur1" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur2" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="20" result="blur3" />
+      <feMerge>
+        <feMergeNode in="blur3" />
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="shadow3D" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.9" />
+    </filter>
+    <linearGradient id="chromeGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="25%" stop-color="#E2E8F0" />
+      <stop offset="50%" stop-color="#94A3B8" />
+      <stop offset="75%" stop-color="#CBD5E1" />
+      <stop offset="100%" stop-color="#64748B" />
+    </linearGradient>
+    <linearGradient id="cyanRibbon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#00f0ff" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#64748B" />
+      <stop offset="30%" stop-color="#E2E8F0" />
+      <stop offset="70%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="800" fill="url(#bgGrad)" rx="32" />
+  <g fill="#00f0ff" opacity="0.75" filter="url(#neonGlow)">
+    <circle cx="210" cy="180" r="2.5" />
+    <circle cx="230" cy="360" r="2" />
+    <circle cx="190" cy="320" r="3" />
+    <circle cx="580" cy="190" r="2.5" />
+    <circle cx="610" cy="330" r="3" />
+    <circle cx="550" cy="390" r="2" />
+    <circle cx="370" cy="120" r="2.5" />
+    <circle cx="480" cy="110" r="3" />
+  </g>
+  <g transform="translate(400, 260)">
+    <circle cx="0" cy="0" r="140" fill="#00d2ff" opacity="0.12" filter="url(#neonGlow)" />
+    <g filter="url(#neonGlow)" fill="none" stroke="url(#cyanRibbon)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M -20 -115 C -60 -125, -115 -85, -110 -30 C -135 -5, -140 40, -110 80 C -130 115, -105 160, -55 160 C -35 180, 0 175, 25 155" />
+      <path d="M -80 -25 C -40 -45, 10 -20, -10 30 C -25 65, -70 70, -75 115" />
+      <path d="M -40 -75 C 0 -75, 40 -35, 25 15 C 10 55, 55 95, 95 70" />
+      <path d="M -20 -115 C 20 -135, 80 -120, 115 -75 C 145 -100, 195 -75, 205 -20 C 230 10, 225 70, 195 100 C 170 135, 115 155, 60 145" />
+      <path d="M 60 -75 C 100 -50, 125 5, 95 50 C 75 80, 120 120, 165 90" />
+      <path d="M 10 145 C 35 120, 75 125, 100 95 C 125 70, 165 85, 185 55" />
+      <path d="M -55 160 C -30 120, 5 125, 20 90" />
+    </g>
+    <g filter="url(#shadow3D)">
+      <path d="M -50 70 C -80 30, -35 -25, 20 -10 C 75 5, 45 75, -5 95 C -40 110, -60 80, -45 55 C -15 0, 85 -65, 155 -110" fill="none" stroke="#00f0ff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" filter="url(#neonGlow)" />
+      <path d="M -50 70 C -80 30, -35 -25, 20 -10 C 75 5, 45 75, -5 95 C -40 110, -60 80, -45 55 C -15 0, 85 -65, 155 -110" fill="none" stroke="url(#arrowGrad)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M -48 68 C -75 32, -32 -22, 20 -8 C 72 6, 42 72, -5 92 C -37 106, -56 78, -43 55 C -13 2, 87 -63, 155 -108" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />
+      <path d="M 120 -120 L 185 -130 L 175 -65 Z" fill="#00e5ff" stroke="#00f0ff" stroke-width="10" stroke-linejoin="round" filter="url(#neonGlow)" />
+      <path d="M 120 -120 L 185 -130 L 175 -65 Z" fill="url(#arrowGrad)" stroke="#FFFFFF" stroke-width="3" stroke-linejoin="round" />
+      <path d="M 132 -114 L 178 -122 L 170 -76 Z" fill="#FFFFFF" opacity="0.85" />
+    </g>
+  </g>
+  <g transform="translate(400, 580)">
+    <text x="0" y="0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Montserrat', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" font-size="110" font-weight="900" letter-spacing="12" fill="#00d2ff" filter="url(#neonGlow)" opacity="0.9">PT KDRT</text>
+    <text x="0" y="8" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Montserrat', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" font-size="110" font-weight="900" letter-spacing="12" fill="#020e1d" filter="url(#shadow3D)">PT KDRT</text>
+    <text x="0" y="0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Montserrat', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" font-size="110" font-weight="900" letter-spacing="12" fill="url(#chromeGradient)" stroke="#FFFFFF" stroke-width="1.5">PT KDRT</text>
+  </g>
+  <g transform="translate(400, 645)">
+    <text x="0" y="0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="28" font-weight="500" letter-spacing="2" fill="#94a3b8" filter="url(#shadow3D)">selamat datang kembali di Kantor.</text>
+  </g>
+</svg>

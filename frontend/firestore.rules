@@ -1,0 +1,202 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isOwner() {
+      return isAuthenticated() && (
+        getUserData().role == 'OWNER' ||
+        request.auth.token.email == 'owner@kamseng.com' ||
+        request.auth.token.email == 'admin@kdrt.com'
+      );
+    }
+
+    function isManager() {
+      return isAuthenticated() && (
+        isOwner() ||
+        getUserData().role == 'MANAGER'
+      );
+    }
+
+    function isInvestor() {
+      return isAuthenticated() && (
+        getUserData().role == 'INVESTOR'
+      );
+    }
+
+    function isEmployee() {
+      return isAuthenticated() && (
+        getUserData().role == 'EMPLOYEE'
+      );
+    }
+
+    function isOwnRecord(employeeId) {
+      return isAuthenticated() && (
+        getUserData().employeeId == employeeId ||
+        request.auth.uid == employeeId
+      );
+    }
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner() || request.auth.uid == userId;
+    }
+
+    // 2. Employees collection
+    match /employees/{employeeId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 3. Attendance collection
+    match /attendance/{attendanceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isOwner();
+    }
+
+    // 4. Workplace Settings & Schedule
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 5. Attendance Bonuses (Uang Rajin)
+    match /attendanceBonuses/{bonusId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isOwner();
+    }
+
+    // 6. Payroll collection
+    match /payroll/{payrollId} {
+      allow read: if isManager() || (
+        isEmployee() && resource.data.employeeId == getUserData().employeeId
+      );
+      allow write: if isOwner();
+    }
+
+    // 7. Transactions collection
+    match /transactions/{transactionId} {
+      allow read: if isManager() || (
+        isInvestor() && resource.data.scope == 'SHARING'
+      );
+      allow write: if isManager();
+    }
+
+    // 8. Daily Performance collection
+    match /dailyPerformance/{performanceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isOwner();
+    }
+
+    // 9. Accounts collection
+    match /accounts/{accountId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 10. Products collection
+    match /products/{productId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 11. Samples collection
+    match /samples/{sampleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // 12. Profit Sharing Settlements
+    match /profitSharingSettlements/{settlementId} {
+      allow read: if isManager() || isInvestor();
+      allow write: if isOwner();
+    }
+
+    // 13. Investor Withdrawals
+    match /investorWithdrawals/{withdrawalId} {
+      allow read: if isManager() || isInvestor();
+      allow write: if isOwner();
+    }
+
+    // 14. Audit Logs collection
+    match /auditLogs/{logId} {
+      allow read: if isManager();
+      allow create: if isAuthenticated();
+      allow update, delete: if isOwner();
+    }
+
+    // 15. Inventory & Assets collection
+    match /inventory/{itemId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 16. Sample Storage Locations
+    match /sampleLocations/{locationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // 17. Tasks collection
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isManager();
+    }
+
+    // 18. Content Schedules collection
+    match /contentSchedules/{scheduleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // 19. Weekly Commission (Input Manual Owner)
+    match /weeklyCommissions/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 20. Employee Commission (Input Manual Owner)
+    match /employeeCommissions/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 21. Expenses collection (sample purchases & operational spending)
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // 22. Daily Tasks collection (legacy naming used by sample -> task sync)
+    match /dailyTasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isManager();
+    }
+
+    // 23. Monthly Closing
+    match /monthlyClosings/{closingId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner();
+    }
+  }
+}

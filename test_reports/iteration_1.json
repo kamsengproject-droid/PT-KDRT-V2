@@ -1,0 +1,52 @@
+{
+  "summary": "First test run for PT-KDRT (Vite/React 19 + Firebase frontend + FastAPI support endpoints). Backend: created pytest suite (10 tests) covering /api/health, /api/auth/client-ip (contract + X-Forwarded-For whitelist match/non-match), /api/scan-product and alias /api/scan-product-image (real generated JPEG marketplace screenshot, data-URL prefix, missing image 400, invalid base64). 10/10 pass serially; AI extraction is accurate (productName='Serum Vitamin C Brightening 20ml', productPrice=54450, platform='TikTok', aiRecommendation='TOP SELLING #1', variantOrSize='Hitam, Size L', earningInfo='Earn Rp5.445'). Frontend: login page renders correctly (MASUK AKUN, email/password, toggle, submit), empty-field validation works, Firebase Auth wiring reaches Firebase (auth/invalid-credential returned). One real UX bug found: after an invalid-credential login the Indonesian error message is never shown because LoginPage is unmounted by the global loading spinner. Authenticated pages not testable (no Firebase credentials). No Firestore writes were performed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/scan-product", "issue": "Intermittent 500 under concurrency: 'litellm.BadRequestError: OpenAIException - Budget has been exceeded! Current cost: 0.0, Max budget: 0.0' (1 of 3 concurrent scan calls failed during the parallel xdist run; all passed when run serially). Likely EMERGENT_LLM_KEY budget/concurrency throttling — consider surfacing a friendly Indonesian message + retry instead of raw litellm text to the UI."},
+      {"endpoint": "/api/scan-product", "issue": "Invalid/garbage base64 is forwarded to the LLM and returns 500 with a raw provider error; a 400 with a validation message would be better."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LoginPage + AuthContext + App/MainLayout", "issue": "Wrong email/password produces NO visible error. AuthContext.loginWithEmail() calls setLoading(true) -> MainLayout renders the global 'Memuat Sesi PT.KDRT...' spinner -> LoginPage unmounts; on failure it remounts fresh, so setErrorMessage('Email atau kata sandi tidak sesuai.') and the typed email/password are wiped. Verified: error element count 0 and email input empty after failed submit, while console logs FirebaseError auth/invalid-credential.", "selector": "[data-testid=\"login-error-message\"]", "priority": "HIGH"},
+      {"component": "LoginPage logo", "issue": "/assets/logo-pt-kdrt.png fails to decode (img.naturalWidth=0x0), broken-image placeholder inside a 224px box. Known issue (corrupted asset in user ZIP) — user will re-upload; no code fix needed. Optionally add an onError fallback to the existing PtKdrtLogo component (currently imported but unused in LoginPage).", "selector": "img[alt=\"PT KDRT\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Login page", "issues": ["Footer 'PT. KDRT MANAGEMENT / Designed by Ko Kamseng' uses text-[11px] slate-500 on slate-950 — borderline low contrast (below WCAG AA for small text)", "Large empty logo frame (broken asset) leaves a big blank block above the card"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/make_test_image.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "HIGH: Make login errors visible — either don't flip the global AuthContext loading flag for interactive email login (use a local submitting flag), or hold the auth error in AuthContext so it survives the LoginPage remount. Also preserve the typed email after a failed attempt.",
+    "MEDIUM: Map Firebase auth error codes (auth/invalid-credential, auth/too-many-requests, auth/network-request-failed, auth/user-disabled) to distinct Indonesian messages instead of one generic string.",
+    "LOW: Wrap /api/scan-product LLM failures into a friendly Indonesian message (+1 retry) instead of leaking raw litellm/budget text; return 400 for non-decodable base64.",
+    "LOW: Remove the unused PtKdrtLogo import in LoginPage or use it as an onError fallback for the broken logo."
+  ],
+  "critical_code_review_comments": [
+    "src/pages/DatabaseSampelPage.tsx is 2252 lines (and AddProductSampleModal.tsx 789) — exceeds the 700-line guideline; split form/table/detail-modal into sub-components.",
+    "AuthContext.loginWithEmail() reads profileData/userRole (lines 177-178) and never uses them before calling loadProfile() — dead code and an extra Firestore read per login.",
+    "DatabaseSampelPage handleSampleSubmit spreads the whole form state into the Firestore payload, so UI-only flags autoCreateExpense/autoCreateTask are persisted into the samples documents; strip them before write.",
+    "Server-side scan endpoint stacks two @api_router.post decorators on one handler — works, but both paths share one OpenAPI operation id; declare the alias explicitly if docs matter.",
+    "New 'size' field verified end-to-end in code: types.ts (size?: string), form state + data-testid='sample-size-input', AddProductSampleModal data-testid='add-sample-size-input' with size.trim() in payload, detail modal data-testid='sample-detail-size', and it reaches Firestore via the payload spread in createSample/updateSample. Runtime verification blocked by missing login credentials."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/LoginPage.tsx (added data-testid: login-form, login-email-input, login-password-input, login-toggle-password, login-submit-button, login-error-message)",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/make_test_image.py"
+  ],
+  "success_rate": {"backend": "100% (10/10 serial; 90% under parallel run due to LLM budget throttle)", "frontend": "80% (login render/validation/toggle/Firebase wiring pass; invalid-credential error display fails; authenticated pages untestable)"},
+  "seed_data_creation": "None. No Firestore/Firebase writes and no Firebase users created. Only a local test JPEG generated at /app/backend/tests/product_screenshot.jpg.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "/app/memory/test_credentials.md is still empty (placeholders only) — no Firebase Auth email/password supplied, so all authenticated pages (Portal, Data Omset, Input Komisi Real, Database Sampel incl. the new size field, Payroll, Investor, Profit Sharing) remain untested.",
+  "context_for_next_testing_agent": "Backend suite lives at /app/backend/tests/ (conftest resolves the preview URL via PREVIEW_URL env with the preview host as fallback, since this Vite app's frontend/.env has no REACT_APP_BACKEND_URL). Run scan-product tests with -n 0 to avoid the EMERGENT_LLM_KEY concurrency/budget error. Login page now has data-testid hooks (login-email-input, login-password-input, login-submit-button, login-error-message, login-toggle-password). Once real Firebase credentials are added to /app/memory/test_credentials.md, test: login -> Portal -> Database Sampel add/edit sample with 'size' (data-testid sample-size-input / add-sample-size-input / sample-detail-size) — but note Firestore project pt-kdrt holds REAL production data, so avoid creating/deleting records unless explicitly allowed.",
+  "rca_of_the_issue": "Invalid-login silent failure: LoginPage keeps errorMessage in local component state, but AuthContext.loginWithEmail sets the provider-wide `loading=true` (AuthContext.tsx:169). App.tsx MainLayout returns the full-screen 'Memuat Sesi PT.KDRT...' loader whenever loading is true (App.tsx:55-65), unmounting LoginPage. When signInWithEmailAndPassword rejects, the finally block sets loading=false and LoginPage remounts with fresh state, discarding both the error message and the typed credentials. Repro: open preview URL, submit any wrong email/password -> spinner flashes, form resets, no error text (console shows FirebaseError auth/invalid-credential). Fix: keep auth errors in AuthContext state, or use a component-local submitting flag for interactive login instead of the global loading flag."
+}

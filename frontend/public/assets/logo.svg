@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <radialGradient id="bgGrad" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#0f223f" />
+      <stop offset="60%" stop-color="#071224" />
+      <stop offset="100%" stop-color="#030813" />
+    </radialGradient>
+
+    <!-- Neon Glow Filter -->
+    <filter id="neonGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur1" />
+      <feGaussianBlur stdDeviation="15" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Subtle Shadow -->
+    <filter id="textShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.7" />
+    </filter>
+
+    <!-- Metallic Gradient for Text -->
+    <linearGradient id="metallicText" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="45%" stop-color="#F1F5F9" />
+      <stop offset="70%" stop-color="#CBD5E1" />
+      <stop offset="100%" stop-color="#94A3B8" />
+    </linearGradient>
+
+    <!-- Arrow Gradient -->
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#CBD5E1" />
+      <stop offset="50%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+  </defs>
+
+  <!-- Dark Background -->
+  <rect width="800" height="800" rx="48" fill="url(#bgGrad)" />
+
+  <!-- Brain & Arrow Icon Group -->
+  <g transform="translate(100, 310)">
+    <!-- Glowing Neural Pathways (Brain) -->
+    <g filter="url(#neonGlow)" fill="none" stroke="#00E5FF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Left Brain Lobes -->
+      <path d="M 90 20 C 60 10, 20 40, 25 80 C 10 95, 5 130, 25 155 C 10 180, 25 215, 60 220 C 70 235, 95 245, 120 230 C 135 245, 165 245, 180 230" />
+      
+      <!-- Top & Outer Contours -->
+      <path d="M 90 20 C 120 0, 170 10, 195 40 C 220 20, 260 35, 270 75 C 290 95, 290 140, 270 165" />
+      
+      <!-- Inner Neural Loops -->
+      <path d="M 50 85 C 75 70, 120 90, 105 130 C 95 155, 60 160, 55 190" />
+      <path d="M 80 50 C 110 50, 140 80, 130 115 C 120 145, 150 175, 180 160" />
+      <path d="M 160 45 C 190 60, 210 100, 190 135 C 175 160, 210 190, 245 170" />
+      <path d="M 120 230 C 140 210, 170 215, 190 195 C 210 175, 240 185, 260 165" />
+    </g>
+
+    <!-- Central Loop with Ascending Growth Arrow -->
+    <!-- Loop Stem -->
+    <path d="M 70 170 C 50 140, 80 100, 120 110 C 160 120, 140 170, 105 185 C 80 195, 65 175, 75 155 C 95 115, 170 70, 225 35" 
+          fill="none" stroke="url(#arrowGrad)" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" filter="url(#textShadow)" />
+    
+    <!-- Arrow Head -->
+    <path d="M 195 25 L 245 18 L 240 70 Z" 
+          fill="#38BDF8" stroke="#FFFFFF" stroke-width="6" stroke-linejoin="round" filter="url(#neonGlow)" />
+    <path d="M 195 25 L 245 18 L 240 70 Z" 
+          fill="url(#arrowGrad)" />
+  </g>
+
+  <!-- Typography Group -->
+  <!-- "PT KDRT" -->
+  <text x="400" y="445" 
+        font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" 
+        font-size="105" 
+        font-weight="900" 
+        letter-spacing="2" 
+        fill="url(#metallicText)" 
+        filter="url(#textShadow)">
+    PT KDRT
+  </text>
+
+  <!-- "AFFILIATE | AI-POWERED SOLUTIONS" -->
+  <text x="402" y="495" 
+        font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" 
+        font-size="21" 
+        font-weight="800" 
+        letter-spacing="4.5" 
+        fill="#94A3B8" 
+        opacity="0.95">
+    AFFILIATE | AI-POWERED SOLUTIONS
+  </text>
+</svg>
