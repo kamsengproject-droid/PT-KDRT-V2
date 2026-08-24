@@ -85,20 +85,10 @@ export const LoginPage: React.FC = () => {
           </div>
 
           <p className="mt-7 max-w-sm text-sm leading-relaxed text-slate-400">
-            Portal internal manajemen afiliasi PT.KDRT — omset harian, komisi,
-            sampel produk, keuangan, payroll, dan profit sharing dalam satu tempat.
+            Ora Et Labora
           </p>
 
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
-            {['Data Omset', 'Komisi Real', 'Arus Kas', 'Profit Sharing'].map((chip) => (
-              <span
-                key={chip}
-                className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-300"
-              >
-                {chip}
-              </span>
-            ))}
-          </div>
+        
         </motion.div>
 
         {/* Auth panel */}
