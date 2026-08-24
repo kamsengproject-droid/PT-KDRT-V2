@@ -70,7 +70,7 @@ export const LoginPage: React.FC = () => {
           transition={{ duration: 0.45, ease: 'easeOut' }}
           className="flex flex-col items-center text-center lg:items-start lg:text-left"
         >
-          <div className="relative w-full max-w-[340px] overflow-hidden rounded-3xl border border-cyan-400/20 bg-[#050A14]">
+          <div className="relative w-full max-w-[300px] overflow-hidden rounded-3xl  bg-[#050A14]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(0,229,255,0.16),transparent_72%)]" />
             <img
               src="/assets/logo-pt-kdrt.png"
