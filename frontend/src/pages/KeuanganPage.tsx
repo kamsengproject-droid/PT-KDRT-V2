@@ -7,16 +7,20 @@ import {
   Home,
   ChevronRight,
   Scale,
+  ArrowRightLeft,
+  PencilLine,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { ArusKasPage } from './ArusKasPage';
 import { PengeluaranPage } from './PengeluaranPage';
 import { SaldoAwalPage } from './SaldoAwalPage';
 import { RekonsiliasiKas } from '../components/finance/RekonsiliasiKas';
+import { PindahDanaPage } from './PindahDanaPage';
+import { InputManualKeuanganPage } from './InputManualKeuanganPage';
 
 interface KeuanganPageProps {
   onBackToPortal?: () => void;
-  defaultTab?: 'ARUS_KAS' | 'PENGELUARAN' | 'REKONSILIASI' | 'SALDO_AWAL';
+  defaultTab?: 'ARUS_KAS' | 'PINDAH_DANA' | 'PENGELUARAN' | 'INPUT_MANUAL' | 'REKONSILIASI' | 'SALDO_AWAL';
 }
 
 export const KeuanganPage: React.FC<KeuanganPageProps> = ({
@@ -24,7 +28,7 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({
   defaultTab = 'ARUS_KAS',
 }) => {
   const { role } = useAuth();
-  const [activeTab, setActiveTab] = useState<'ARUS_KAS' | 'PENGELUARAN' | 'REKONSILIASI' | 'SALDO_AWAL'>(defaultTab);
+  const [activeTab, setActiveTab] = useState<NonNullable<KeuanganPageProps['defaultTab']>>(defaultTab);
 
   return (
     <div className="space-y-6 pb-12">
@@ -44,7 +48,7 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({
           <span className="font-bold text-emerald-600">
             {activeTab === 'ARUS_KAS'
               ? 'BUKU KAS & CASHFLOW'
-              : activeTab === 'SALDO_AWAL' ? 'SALDO AWAL & PENYESUAIAN' : activeTab === 'REKONSILIASI'
+              : activeTab === 'PINDAH_DANA' ? 'PINDAH DANA' : activeTab === 'INPUT_MANUAL' ? 'INPUT MANUAL KEUANGAN' : activeTab === 'SALDO_AWAL' ? 'SALDO AWAL & PENYESUAIAN' : activeTab === 'REKONSILIASI'
               ? 'REKONSILIASI KAS'
               : 'PENGELUARAN OPERASIONAL'}
           </span>
@@ -74,6 +78,10 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({
           <DollarSign className="h-4 w-4 text-emerald-400" />
           <span>[ Buku Kas & Cashflow Master ]</span>
         </button>
+
+        {role === 'OWNER' && <button onClick={() => setActiveTab('PINDAH_DANA')} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition-all ${activeTab === 'PINDAH_DANA' ? 'bg-zinc-900 text-white shadow-xs' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}>
+          <ArrowRightLeft className="h-4 w-4 text-indigo-400" /><span>[ Pindah Dana ]</span>
+        </button>}
 
         
         {role === 'OWNER' && (
@@ -114,11 +122,18 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({
           <FileSpreadsheet className="h-4 w-4 text-rose-400" />
           <span>[ Pengeluaran Operasional ]</span>
         </button>
+        {role === 'OWNER' && <button onClick={() => setActiveTab('INPUT_MANUAL')} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition-all ${activeTab === 'INPUT_MANUAL' ? 'bg-zinc-900 text-white shadow-xs' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}>
+          <PencilLine className="h-4 w-4 text-amber-400" /><span>[ Input Manual ]</span>
+        </button>}
       </div>
 
       {/* Tab Content */}
             {activeTab === 'ARUS_KAS' ? (
         <ArusKasPage />
+      ) : activeTab === 'PINDAH_DANA' ? (
+        <PindahDanaPage />
+      ) : activeTab === 'INPUT_MANUAL' ? (
+        <InputManualKeuanganPage />
       ) : activeTab === 'SALDO_AWAL' ? (
         <SaldoAwalPage />
       ) : activeTab === 'REKONSILIASI' ? (

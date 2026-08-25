@@ -238,6 +238,13 @@ export async function createFinancialTransaction(
       inventoryId: transactionData.inventoryId || null,
       profitSharingSettlementId: transactionData.profitSharingSettlementId || null,
 
+      transferId: transactionData.transferId || null,
+      fromAccount: transactionData.fromAccount || null,
+      toAccount: transactionData.toAccount || null,
+      adminFee: Number(transactionData.adminFee) || 0,
+      netAmount: Number(transactionData.netAmount) || 0,
+      performanceId: transactionData.performanceId || null,
+
       paymentMethod: transactionData.paymentMethod || 'TRANSFER',
       description: transactionData.description || 'Transaksi Keuangan',
       attachmentUrl: transactionData.attachmentUrl || null,
@@ -273,12 +280,62 @@ export async function createFinancialTransaction(
     return {
       success: true,
       id: transactionDocId,
-      message: `Transaksi ${payload.type === 'INCOME' ? 'Uang Masuk' : 'Uang Keluar'} sebesar Rp ${amount.toLocaleString('id-ID')} berhasil dicatat.`,
+      message: `Transaksi ${payload.type === 'INCOME' ? 'Uang Masuk' : payload.type === 'EXPENSE' ? 'Uang Keluar' : 'Pindah Dana'} sebesar Rp ${amount.toLocaleString('id-ID')} berhasil dicatat.`,
     };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, TRANSACTIONS_COLLECTION);
     throw error;
   }
+}
+
+// 5a. Pindah Dana dari komisi TikTok ke rekening. This intentionally creates
+// one TRANSFER entry only: it is a payout trace, not a second income record.
+export async function recordFundTransfer(
+  data: {
+    date: string;
+    scope: ScopeType;
+    grossAmount: number;
+    adminFee: number;
+    fromAccount: string;
+    toAccount: string;
+    description?: string;
+    notes?: string;
+  },
+  currentUserId: string,
+  currentUserName: string
+): Promise<{ success: boolean; id?: string; message: string }> {
+  const grossAmount = Number(data.grossAmount) || 0;
+  const adminFee = Number(data.adminFee) || 0;
+  const netAmount = grossAmount - adminFee;
+
+  if (grossAmount <= 0) throw new Error('Nominal Komisi Real harus lebih besar dari Rp 0.');
+  if (adminFee < 0 || netAmount < 0) throw new Error('Admin TikTok tidak boleh melebihi Komisi Real.');
+  if (!data.toAccount.trim()) throw new Error('Rekening tujuan wajib diisi.');
+
+  const transferId = `transfer_${Date.now()}`;
+  return createFinancialTransaction(
+    {
+      type: 'TRANSFER',
+      amount: grossAmount,
+      date: data.date || tanggalHariIni(),
+      category: 'PINDAH DANA',
+      scope: data.scope,
+      sourceType: 'FUND_TRANSFER',
+      referenceId: transferId,
+      transferId,
+      fromAccount: data.fromAccount || 'Komisi Real TikTok',
+      toAccount: data.toAccount.trim(),
+      adminFee,
+      netAmount,
+      paymentMethod: 'TRANSFER',
+      description: data.description?.trim() || `Pencairan Komisi Real ke ${data.toAccount.trim()}`,
+      notes: data.notes?.trim() || '',
+      createdBy: currentUserId,
+      createdByName: currentUserName,
+    },
+    currentUserId,
+    currentUserName
+  );
 }
 
 // 5. Catat Uang Masuk Khusus TikTok (GMV & Estimasi Komisi adalah metrik, Komisi Real adalah UANG MASUK)
