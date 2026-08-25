@@ -123,7 +123,8 @@ export const DEFAULT_INCOME_CATEGORIES: string[] = [
   'LAINNYA',
 ];
 
-export type TransactionType = 'INCOME' | 'EXPENSE' | 'OPENING_BALANCE';
+// TRANSFER is an internal movement of money, never new income or an expense.
+export type TransactionType = 'INCOME' | 'EXPENSE' | 'TRANSFER' | 'OPENING_BALANCE';
 export type TransactionStatus = 'ACTIVE' | 'VOID';
 export type TransactionSourceType =
   | 'TIKTOK_COMMISSION'
@@ -137,6 +138,9 @@ export type TransactionSourceType =
   | 'ATTENDANCE_BONUS'
   | 'PROFIT_SHARING'
   | 'MANUAL'
+  | 'DAILY_EXPENSE'
+  | 'COMMISSION_REAL'
+  | 'FUND_TRANSFER'
   | 'OTHER'
   | 'OPENING_BALANCE';
 
@@ -197,6 +201,16 @@ export interface FinancialTransaction {
   productId?: string | null;
   inventoryId?: string | null;
   profitSharingSettlementId?: string | null;
+
+  // Pindah Dana: a single informational ledger entry so a TikTok payout is not
+  // counted again as income. `amount` is the gross commission; netAmount is the
+  // amount that actually reaches the destination account after TikTok's fee.
+  transferId?: string | null;
+  fromAccount?: string | null;
+  toAccount?: string | null;
+  adminFee?: number;
+  netAmount?: number;
+  performanceId?: string | null;
 
   paymentMethod?: PaymentMethod | string;
   description: string;

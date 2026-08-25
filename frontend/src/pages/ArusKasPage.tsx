@@ -173,10 +173,14 @@ export const ArusKasPage: React.FC = () => {
                   filtered.map(tx => (
                     <tr key={tx.id} className="hover:bg-zinc-50">
                       <td className="px-5 py-3.5 whitespace-nowrap font-medium text-zinc-900">{formatTanggal(tx.date)}</td>
-                      <td className="px-5 py-3.5 font-bold text-zinc-700">{tx.category}</td>
+                      <td className="px-5 py-3.5 font-bold text-zinc-700">
+                        {tx.category}
+                        {tx.type === 'TRANSFER' && <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] text-indigo-700">PINDAH DANA</span>}
+                      </td>
                       <td className="px-5 py-3.5 max-w-[200px] truncate text-zinc-500" title={tx.description}>
                         {tx.description}
                         {tx.accountName && <span className="ml-1 text-emerald-600 font-semibold">[{tx.accountName}]</span>}
+                        {tx.type === 'TRANSFER' && <span className="ml-1 font-semibold text-indigo-600">[{tx.fromAccount} → {tx.toAccount}]</span>}
                       </td>
                       <td className="px-5 py-3.5 font-black text-emerald-600">
                         {tx.type === 'INCOME' ? formatRupiah(tx.amount) : '-'}
@@ -329,14 +333,21 @@ export const ArusKasPage: React.FC = () => {
                  <span className="font-bold text-zinc-500">Kategori</span>
                  <span className="font-black text-zinc-900">{selectedTxDetail.category}</span>
                </div>
+               {selectedTxDetail.type === 'TRANSFER' && (
+                 <>
+                   <div className="flex justify-between p-3 rounded-lg bg-indigo-50 border border-indigo-100"><span className="font-bold text-indigo-600">Dari</span><span className="font-black text-indigo-950">{selectedTxDetail.fromAccount || 'Komisi Real TikTok'}</span></div>
+                   <div className="flex justify-between p-3 rounded-lg bg-indigo-50 border border-indigo-100"><span className="font-bold text-indigo-600">Ke</span><span className="font-black text-indigo-950">{selectedTxDetail.toAccount || '-'}</span></div>
+                   <div className="flex justify-between p-3 rounded-lg bg-emerald-50 border border-emerald-100"><span className="font-bold text-emerald-700">Dana bersih diterima</span><span className="font-black text-emerald-900">{formatRupiah(selectedTxDetail.netAmount || 0)}</span></div>
+                 </>
+               )}
                <div className="flex justify-between p-3 rounded-lg bg-zinc-50 border border-zinc-200">
                  <span className="font-bold text-zinc-500">Tanggal</span>
                  <span className="font-black text-zinc-900">{formatTanggal(selectedTxDetail.date)}</span>
                </div>
                <div className="flex justify-between p-3 rounded-lg bg-zinc-50 border border-zinc-200">
                  <span className="font-bold text-zinc-500">Nominal</span>
-                 <span className={`font-black text-lg ${selectedTxDetail.type === 'INCOME' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                   {selectedTxDetail.type === 'INCOME' ? '+' : '-'}{formatRupiah(selectedTxDetail.amount)}
+                 <span className={`font-black text-lg ${selectedTxDetail.type === 'INCOME' ? 'text-emerald-600' : selectedTxDetail.type === 'EXPENSE' ? 'text-rose-600' : 'text-indigo-600'}`}>
+                   {selectedTxDetail.type === 'TRANSFER' ? 'Pindah Dana ' : selectedTxDetail.type === 'INCOME' ? '+' : '-'}{formatRupiah(selectedTxDetail.amount)}
                  </span>
                </div>
                {selectedTxDetail.accountName && (
