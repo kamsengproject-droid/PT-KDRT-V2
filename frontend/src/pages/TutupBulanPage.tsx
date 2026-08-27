@@ -335,16 +335,19 @@ export const TutupBulanPage: React.FC<TutupBulanPageProps> = ({ userProfile: pro
           )}
 
           {/* Metric Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-5 rounded-2xl border border-emerald-200 bg-emerald-50/70 shadow-2xs">
-              <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">
-                UANG MASUK
-              </span>
-              <div className="text-2xl font-black text-emerald-950 font-mono tracking-tight mt-1">
-                {formatRupiah(displayData.uangMasuk)}
-              </div>
-              <div className="mt-1 text-xs text-emerald-700 font-medium">Berdasarkan transaksi masuk</div>
-            </div>
+         <div className="p-5 rounded-2xl border border-rose-200 bg-rose-50/70 shadow-2xs">
+  <span className="text-[10px] font-black uppercase tracking-wider text-rose-700">
+    KAS & BANK - UANG KELUAR
+  </span>
+
+  <div className="text-2xl font-black text-rose-950 font-mono tracking-tight mt-1">
+    {formatRupiah(displayData.uangKeluar)}
+  </div>
+
+  <div className="mt-1 text-xs text-rose-700 font-medium">
+    Pengeluaran yang sudah tercatat sebagai kas/bank
+  </div>
+</div>
 
             <div className="p-5 rounded-2xl border border-rose-200 bg-rose-50/70 shadow-2xs">
               <span className="text-[10px] font-black uppercase tracking-wider text-rose-700">
