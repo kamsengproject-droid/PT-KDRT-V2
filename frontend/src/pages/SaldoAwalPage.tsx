@@ -62,36 +62,39 @@ export const SaldoAwalPage: React.FC = () => {
         'Saldo rekening saat pembukuan KANTOR PT.KDRT mulai digunakan.',
     });
 
-  /* ============================================================
-     LOAD SALDO AWAL
-  ============================================================ */
+  /*
+   * ============================================================
+   * LOAD SALDO AWAL
+   * ============================================================
+   */
 
   useEffect(() => {
-    const unsub =
-      subscribeTransactions(
-        undefined,
-        (data) => {
-          const openingBalances =
-            data.filter(
-              (transaction) =>
-                transaction.sourceType ===
-                'OPENING_BALANCE'
-            );
-
-          setTransactions(
-            openingBalances
+    const unsub = subscribeTransactions(
+      undefined,
+      (data) => {
+        const openingBalances =
+          data.filter(
+            (transaction) =>
+              transaction.sourceType ===
+              'OPENING_BALANCE'
           );
 
-          setLoading(false);
-        }
-      );
+        setTransactions(
+          openingBalances
+        );
+
+        setLoading(false);
+      }
+    );
 
     return () => unsub();
   }, []);
 
-  /* ============================================================
-     TOTAL SALDO AWAL
-  ============================================================ */
+  /*
+   * ============================================================
+   * ACTIVE SALDO AWAL
+   * ============================================================
+   */
 
   const activeTransactions =
     transactions.filter(
@@ -99,11 +102,18 @@ export const SaldoAwalPage: React.FC = () => {
         transaction.status !== 'VOID'
     );
 
+  /*
+   * ============================================================
+   * SALDO AWAL PER SCOPE
+   * ============================================================
+   */
+
   const sharingBalance =
     activeTransactions
       .filter(
         (transaction) =>
-          transaction.scope === 'SHARING'
+          transaction.scope ===
+          'SHARING'
       )
       .reduce(
         (total, transaction) =>
@@ -118,7 +128,8 @@ export const SaldoAwalPage: React.FC = () => {
     activeTransactions
       .filter(
         (transaction) =>
-          transaction.scope === 'PRIBADI'
+          transaction.scope ===
+          'PRIBADI'
       )
       .reduce(
         (total, transaction) =>
@@ -133,9 +144,60 @@ export const SaldoAwalPage: React.FC = () => {
     sharingBalance +
     pribadiBalance;
 
-  /* ============================================================
-     SUBMIT
-  ============================================================ */
+  /*
+   * ============================================================
+   * SALDO AWAL PER REKENING
+   * ============================================================
+   */
+
+  const accountBalances =
+    activeTransactions.reduce<
+      Record<
+        string,
+        {
+          name: string;
+          scope: string;
+          amount: number;
+        }
+      >
+    >(
+      (result, transaction) => {
+        const accountName =
+          (
+            transaction.accountName ||
+            'Rekening Tidak Diketahui'
+          ).trim();
+
+        if (!result[accountName]) {
+          result[accountName] = {
+            name: accountName,
+            scope:
+              transaction.scope ||
+              'SHARING',
+            amount: 0,
+          };
+        }
+
+        result[accountName].amount +=
+          Number(
+            transaction.amount || 0
+          );
+
+        return result;
+      },
+      {}
+    );
+
+  const accountBalanceList =
+    Object.values(
+      accountBalances
+    );
+
+  /*
+   * ============================================================
+   * SUBMIT
+   * ============================================================
+   */
 
   const handleSubmit = async (
     event: React.FormEvent
@@ -157,7 +219,9 @@ export const SaldoAwalPage: React.FC = () => {
       return;
     }
 
-    if (!formData.accountName.trim()) {
+    if (
+      !formData.accountName.trim()
+    ) {
       setErrorMsg(
         'Nama rekening wajib diisi.'
       );
@@ -179,12 +243,17 @@ export const SaldoAwalPage: React.FC = () => {
 
       /*
        * Satu rekening + tanggal + scope
-       * tidak boleh mempunyai saldo awal ganda.
+       * hanya boleh mempunyai satu
+       * saldo awal aktif.
        */
 
       const referenceId =
         `OPENING_BALANCE_${formData.scope}_${formData.accountName
-          .replace(/\s+/g, '_')
+          .trim()
+          .replace(
+            /\s+/g,
+            '_'
+          )
           .toUpperCase()}_${formData.date.replace(
           /-/g,
           ''
@@ -195,8 +264,8 @@ export const SaldoAwalPage: React.FC = () => {
           (transaction) =>
             transaction.referenceId ===
               referenceId &&
-            transaction.status ===
-              'ACTIVE'
+            transaction.status !==
+              'VOID'
         );
 
       if (existing) {
@@ -206,12 +275,11 @@ export const SaldoAwalPage: React.FC = () => {
       }
 
       /*
-       * OPENING_BALANCE adalah saldo awal rekening.
+       * OPENING_BALANCE bukan pendapatan.
        *
-       * Bukan pendapatan.
-       *
-       * Arus Kas harus memperlakukannya sebagai
-       * titik awal saldo rekening.
+       * Ini adalah titik awal saldo
+       * rekening yang akan dipakai
+       * oleh Kas & Bank.
        */
 
       const transaction: any = {
@@ -275,7 +343,8 @@ export const SaldoAwalPage: React.FC = () => {
       });
 
       setTimeout(
-        () => setSuccessMsg(''),
+        () =>
+          setSuccessMsg(''),
         3000
       );
     } catch (error: any) {
@@ -293,9 +362,11 @@ export const SaldoAwalPage: React.FC = () => {
     }
   };
 
-  /* ============================================================
-     VOID SALDO AWAL
-  ============================================================ */
+  /*
+   * ============================================================
+   * VOID SALDO AWAL
+   * ============================================================
+   */
 
   const handleVoid = async (
     transaction: FinancialTransaction
@@ -333,7 +404,8 @@ export const SaldoAwalPage: React.FC = () => {
       );
 
       setTimeout(
-        () => setSuccessMsg(''),
+        () =>
+          setSuccessMsg(''),
         3000
       );
     } catch (error: any) {
@@ -346,9 +418,11 @@ export const SaldoAwalPage: React.FC = () => {
     }
   };
 
-  /* ============================================================
-     OWNER ONLY
-  ============================================================ */
+  /*
+   * ============================================================
+   * OWNER ONLY
+   * ============================================================
+   */
 
   if (!isOwner) {
     return (
@@ -363,24 +437,22 @@ export const SaldoAwalPage: React.FC = () => {
     );
   }
 
-  /* ============================================================
-     RENDER
-  ============================================================ */
+  /*
+   * ============================================================
+   * RENDER
+   * ============================================================
+   */
 
   return (
     <div className="space-y-6">
 
-      {/* SUCCESS */}
-
       {successMsg && (
         <div className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white shadow-lg">
-
           <CheckCircle2 className="h-4 w-4" />
 
           <span>
             {successMsg}
           </span>
-
         </div>
       )}
 
@@ -402,8 +474,9 @@ export const SaldoAwalPage: React.FC = () => {
 
             <p className="mt-1 text-sm text-zinc-500">
 
-              Masukkan saldo rekening yang benar-benar
-              tersedia saat sistem mulai digunakan.
+              Saldo awal adalah uang yang
+              benar-benar sudah tersedia di
+              rekening ketika sistem mulai digunakan.
 
             </p>
 
@@ -417,11 +490,9 @@ export const SaldoAwalPage: React.FC = () => {
             }}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-indigo-500"
           >
-
             <Plus className="h-4 w-4" />
 
             Set Saldo Awal
-
           </button>
 
         </div>
@@ -475,6 +546,75 @@ export const SaldoAwalPage: React.FC = () => {
         </div>
 
       </div>
+
+      {/* PER REKENING */}
+
+      <section className="space-y-3">
+
+        <div>
+
+          <h2 className="text-lg font-black text-zinc-900">
+            Saldo Awal per Rekening
+          </h2>
+
+          <p className="text-xs text-zinc-500">
+            Nilai ini menjadi titik awal
+            perhitungan saldo Kas & Bank.
+          </p>
+
+        </div>
+
+        {accountBalanceList.length ===
+        0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400">
+            Belum ada saldo awal rekening.
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+
+            {accountBalanceList.map(
+              (account) => (
+                <div
+                  key={account.name}
+                  className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm"
+                >
+
+                  <div className="flex items-center justify-between">
+
+                    <div className="flex items-center gap-2">
+
+                      <Landmark className="h-5 w-5 text-indigo-600" />
+
+                      <div>
+
+                        <p className="font-black text-zinc-900">
+                          {account.name}
+                        </p>
+
+                        <span className="text-[10px] font-black text-zinc-400">
+                          {account.scope}
+                        </span>
+
+                      </div>
+
+                    </div>
+
+                    <p className="text-lg font-black text-indigo-700">
+                      {formatRupiah(
+                        account.amount
+                      )}
+                    </p>
+
+                  </div>
+
+                </div>
+              )
+            )}
+
+          </div>
+        )}
+
+      </section>
 
       {/* TABLE */}
 
@@ -535,7 +675,8 @@ export const SaldoAwalPage: React.FC = () => {
 
                 </tr>
 
-              ) : transactions.length === 0 ? (
+              ) : transactions.length ===
+                0 ? (
 
                 <tr>
 
@@ -564,11 +705,9 @@ export const SaldoAwalPage: React.FC = () => {
                     >
 
                       <td className="whitespace-nowrap px-5 py-3.5 font-medium">
-
                         {formatTanggal(
                           transaction.date
                         )}
-
                       </td>
 
                       <td className="px-5 py-3.5">
@@ -581,42 +720,34 @@ export const SaldoAwalPage: React.FC = () => {
                               : 'bg-rose-100 text-rose-700'
                           }`}
                         >
-
                           {
                             transaction.scope
                           }
-
                         </span>
 
                       </td>
 
                       <td className="px-5 py-3.5 font-bold text-zinc-900">
-
                         {
                           transaction.accountName
                         }
-
                       </td>
 
                       <td className="px-5 py-3.5 font-black text-indigo-700">
-
                         {formatRupiah(
                           Number(
                             transaction.amount ||
                               0
                           )
                         )}
-
                       </td>
 
                       <td className="max-w-[280px] px-5 py-3.5">
-
                         {
                           transaction.notes ||
                           transaction.description ||
                           '-'
                         }
-
                       </td>
 
                       <td className="px-5 py-3.5">
@@ -653,9 +784,7 @@ export const SaldoAwalPage: React.FC = () => {
                             className="rounded-lg p-1.5 text-rose-600 transition-colors hover:bg-rose-50"
                             title="Batalkan Saldo Awal"
                           >
-
                             <Trash2 className="h-4 w-4" />
-
                           </button>
 
                         )}
@@ -677,9 +806,7 @@ export const SaldoAwalPage: React.FC = () => {
 
       </div>
 
-      {/* ========================================================
-          MODAL
-      ======================================================== */}
+      {/* MODAL */}
 
       {isModalOpen && (
 
@@ -701,8 +828,6 @@ export const SaldoAwalPage: React.FC = () => {
 
             </div>
 
-            {/* ERROR */}
-
             {errorMsg && (
 
               <div className="mb-4 flex items-center gap-2 rounded-xl bg-rose-50 p-3 text-xs font-bold text-rose-700">
@@ -719,8 +844,6 @@ export const SaldoAwalPage: React.FC = () => {
               onSubmit={handleSubmit}
               className="space-y-4"
             >
-
-              {/* TANGGAL + SCOPE */}
 
               <div className="grid grid-cols-2 gap-4">
 
@@ -784,8 +907,6 @@ export const SaldoAwalPage: React.FC = () => {
 
               </div>
 
-              {/* REKENING */}
-
               <div>
 
                 <label className="mb-1 block text-xs font-bold text-zinc-700">
@@ -812,8 +933,6 @@ export const SaldoAwalPage: React.FC = () => {
 
               </div>
 
-              {/* NOMINAL */}
-
               <div>
 
                 <label className="mb-1 block text-xs font-extrabold text-zinc-800">
@@ -836,8 +955,6 @@ export const SaldoAwalPage: React.FC = () => {
                 />
 
               </div>
-
-              {/* CATATAN */}
 
               <div>
 
@@ -864,8 +981,6 @@ export const SaldoAwalPage: React.FC = () => {
 
               </div>
 
-              {/* BUTTON */}
-
               <div className="flex justify-end gap-2 border-t border-zinc-100 pt-4">
 
                 <button
@@ -888,11 +1003,9 @@ export const SaldoAwalPage: React.FC = () => {
                   }
                   className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white shadow-md transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-
                   {submitting
                     ? 'MENYIMPAN...'
                     : 'SIMPAN SALDO AWAL'}
-
                 </button>
 
               </div>
