@@ -9,18 +9,57 @@ import {
   writeBatch,
   getDocs,
   setDoc,
-  getDoc
+  getDoc,
 } from 'firebase/firestore';
+
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { DailyPerformance, ScopeType } from '../types';
 import { catatAuditLog } from './auditService';
-import { TRANSACTIONS_COLLECTION } from './transactionService';
+
+/**
+ * ============================================================
+ * PERFORMANCE SERVICE
+ * ============================================================
+ *
+ * Prinsip utama:
+ *
+ * dailyPerformance = SUMBER DATA PERFORMA AKUN
+ *
+ * Berisi:
+ * - GMV
+ * - Estimated Commission
+ * - Commission Real
+ * - Item Sold
+ * - Product Impression
+ *
+ * IMPORTANT:
+ * Komisi Real TIDAK dibuat sebagai transaksi Kas & Bank.
+ *
+ * Komisi Real baru menjadi uang rekening aktual setelah:
+ *
+ * Komisi Real
+ *      ↓
+ * Pindah Dana
+ *      ↓
+ * transactions / Kas & Bank
+ *
+ * Dengan demikian:
+ *
+ * Dashboard Akun ≠ Saldo Bank
+ *
+ * Saldo Bank hanya berasal dari transaksi Kas & Bank aktual.
+ */
+
+/* ============================================================
+   1. SUBSCRIBE DAILY PERFORMANCE
+   ============================================================ */
 
 export function subscribeDailyPerformance(
   scope?: ScopeType,
   callback?: (list: DailyPerformance[]) => void
 ) {
   const colRef = collection(db, 'dailyPerformance');
+
   const q = scope
     ? query(colRef, where('scope', '==', scope))
     : colRef;
@@ -32,38 +71,106 @@ export function subscribeDailyPerformance(
         id: d.id,
         ...d.data(),
       })) as DailyPerformance[];
-      // Sort by date desc
-      list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      if (callback) callback(list);
+
+      // Sort terbaru ke terlama
+      list.sort((a, b) =>
+        (b.date || '').localeCompare(a.date || '')
+      );
+
+      if (callback) {
+        callback(list);
+      }
     },
     (err) => {
-      handleFirestoreError(err, OperationType.GET, 'dailyPerformance');
+      handleFirestoreError(
+        err,
+        OperationType.GET,
+        'dailyPerformance'
+      );
     }
   );
 }
 
-// Deterministic ID generator
-export function getPerformanceDocId(accountId: string, date: string): string {
-  // PERFORMANCE_ACCOUNTID_YYYY-MM-DD
+/* ============================================================
+   2. DETERMINISTIC DOCUMENT ID
+   ============================================================ */
+
+/**
+ * Satu akun hanya boleh mempunyai satu data performa
+ * untuk satu tanggal.
+ *
+ * PERFORMANCE_ACCOUNTID_YYYY-MM-DD
+ */
+export function getPerformanceDocId(
+  accountId: string,
+  date: string
+): string {
   return `PERFORMANCE_${accountId}_${date}`;
 }
 
-export function getTransactionDocId(performanceId: string): string {
-  // COMMISSION_REAL_{performanceId}
+/**
+ * Legacy transaction ID.
+ *
+ * Fungsi ini tetap dipertahankan untuk kompatibilitas
+ * dengan data lama dan proses cleanup historical transaction.
+ *
+ * IMPORTANT:
+ * Fungsi ini TIDAK lagi dipakai ketika menyimpan Komisi Real baru.
+ */
+export function getTransactionDocId(
+  performanceId: string
+): string {
   return `COMMISSION_REAL_${performanceId}`;
 }
 
-// 1. Check duplicate
-export async function checkDuplicatePerformance(accountId: string, date: string): Promise<boolean> {
+/* ============================================================
+   3. CHECK DUPLICATE PERFORMANCE
+   ============================================================ */
+
+export async function checkDuplicatePerformance(
+  accountId: string,
+  date: string
+): Promise<boolean> {
   const docId = getPerformanceDocId(accountId, date);
-  const docRef = doc(db, 'dailyPerformance', docId);
+
+  const docRef = doc(
+    db,
+    'dailyPerformance',
+    docId
+  );
+
   const snap = await getDoc(docRef);
+
   return snap.exists();
 }
 
-// 2. Save (Atomic create/update for both performance and transaction)
+/* ============================================================
+   4. SAVE KOMISI REAL
+   ============================================================ */
+
+/**
+ * Menyimpan Komisi Real ke dailyPerformance.
+ *
+ * IMPORTANT:
+ * Fungsi ini TIDAK membuat transaksi ke collection
+ * `transactions`.
+ *
+ * Alasannya:
+ *
+ * Komisi Real = data performa akun.
+ *
+ * Komisi Real belum tentu berarti uang sudah masuk rekening
+ * perusahaan.
+ *
+ * Uang rekening baru dicatat melalui Pindah Dana.
+ */
 export async function saveKomisiReal(
-  entry: Partial<Omit<DailyPerformance, 'id' | 'createdAt' | 'updatedAt'>> & {
+  entry: Partial<
+    Omit<
+      DailyPerformance,
+      'id' | 'createdAt' | 'updatedAt'
+    >
+  > & {
     accountId: string;
     date: string;
     commissionReal?: number;
@@ -76,114 +183,229 @@ export async function saveKomisiReal(
   currentUserName: string
 ) {
   try {
-    const batch = writeBatch(db);
-    
+    /* --------------------------------------------------------
+       VALIDASI DASAR
+       -------------------------------------------------------- */
+
     if (!entry.accountId || !entry.date) {
-      throw new Error('AccountId dan Date wajib diisi.');
+      throw new Error(
+        'AccountId dan Date wajib diisi.'
+      );
     }
 
-    const perfId = getPerformanceDocId(entry.accountId, entry.date);
-    const txId = getTransactionDocId(perfId);
+    const perfId = getPerformanceDocId(
+      entry.accountId,
+      entry.date
+    );
 
-    const perfRef = doc(db, 'dailyPerformance', perfId);
-    const txRef = doc(db, TRANSACTIONS_COLLECTION, txId);
+    const perfRef = doc(
+      db,
+      'dailyPerformance',
+      perfId
+    );
+
+    /* --------------------------------------------------------
+       AMBIL DATA LAMA
+       -------------------------------------------------------- */
 
     const perfSnap = await getDoc(perfRef);
-    const existingPerf = perfSnap.exists() ? perfSnap.data() : null;
 
-    // Check commission value
+    const existingPerf = perfSnap.exists()
+      ? perfSnap.data()
+      : null;
+
+    /* --------------------------------------------------------
+       KOMISI REAL
+       -------------------------------------------------------- */
+
     let commissionValue: number;
-    if (entry.commissionReal !== undefined || entry.realCommission !== undefined) {
-      commissionValue = Number(entry.commissionReal) || Number(entry.realCommission) || 0;
+
+    if (
+      entry.commissionReal !== undefined ||
+      entry.realCommission !== undefined
+    ) {
+      commissionValue =
+        Number(
+          entry.commissionReal ??
+            entry.realCommission
+        ) || 0;
     } else {
-      commissionValue = Number(existingPerf?.commissionReal) || Number(existingPerf?.realCommission) || 0;
+      commissionValue =
+        Number(existingPerf?.commissionReal) ||
+        Number(existingPerf?.realCommission) ||
+        0;
     }
 
-    // Check GMV & Estimated Commission (preserve existing if not provided)
-    const gmvValue = entry.gmv !== undefined 
-      ? (Number(entry.gmv) || 0) 
-      : (Number(existingPerf?.gmv) || 0);
+    /* --------------------------------------------------------
+       GMV
+       -------------------------------------------------------- */
 
-    const estCommValue = entry.estimatedCommission !== undefined 
-      ? (Number(entry.estimatedCommission) || 0) 
-      : (Number(existingPerf?.estimatedCommission) || 0);
+    const gmvValue =
+      entry.gmv !== undefined
+        ? Number(entry.gmv) || 0
+        : Number(existingPerf?.gmv) || 0;
 
-    // Item Sold & Product Impression belong to the "Data GMV" tab. Saving Komisi
-    // Real must never clear them, so they are preserved from the existing record
-    // unless explicitly provided.
-    const itemSoldValue = entry.itemSold !== undefined
-      ? (Number(entry.itemSold) || 0)
-      : (Number(existingPerf?.itemSold) || 0);
+    /* --------------------------------------------------------
+       ESTIMATED COMMISSION
+       -------------------------------------------------------- */
 
-    const productImpressionValue = entry.productImpression !== undefined
-      ? (Number(entry.productImpression) || 0)
-      : (Number(existingPerf?.productImpression) || 0);
+    const estCommValue =
+      entry.estimatedCommission !== undefined
+        ? Number(entry.estimatedCommission) || 0
+        : Number(
+            existingPerf?.estimatedCommission
+          ) || 0;
 
-    // Explicit field whitelist — never spread the raw caller payload into Firestore.
+    /* --------------------------------------------------------
+       ITEM SOLD
+       -------------------------------------------------------- */
+
+    const itemSoldValue =
+      entry.itemSold !== undefined
+        ? Number(entry.itemSold) || 0
+        : Number(existingPerf?.itemSold) || 0;
+
+    /* --------------------------------------------------------
+       PRODUCT IMPRESSION
+       -------------------------------------------------------- */
+
+    const productImpressionValue =
+      entry.productImpression !== undefined
+        ? Number(entry.productImpression) || 0
+        : Number(
+            existingPerf?.productImpression
+          ) || 0;
+
+    /* --------------------------------------------------------
+       WHITELIST PAYLOAD
+       -------------------------------------------------------- */
+
     const perfData = {
       date: entry.date,
+
       accountId: entry.accountId,
-      accountName: entry.accountName ?? existingPerf?.accountName ?? '',
-      scope: entry.scope ?? existingPerf?.scope ?? 'SHARING',
-      notes: existingPerf?.notes ?? '',
-      commissionNotes: entry.commissionNotes ?? existingPerf?.commissionNotes ?? '',
+
+      accountName:
+        entry.accountName ??
+        existingPerf?.accountName ??
+        '',
+
+      scope:
+        entry.scope ??
+        existingPerf?.scope ??
+        'SHARING',
+
+      notes:
+        existingPerf?.notes ??
+        '',
+
+      commissionNotes:
+        entry.commissionNotes ??
+        existingPerf?.commissionNotes ??
+        '',
+
       gmv: gmvValue,
-      estimatedCommission: estCommValue,
-      itemSold: itemSoldValue,
-      productImpression: productImpressionValue,
-      commissionReal: commissionValue,
-      realCommission: commissionValue, // Legacy fallback
-      updatedBy: currentUserId,
-      updatedAt: serverTimestamp(),
+
+      estimatedCommission:
+        estCommValue,
+
+      itemSold:
+        itemSoldValue,
+
+      productImpression:
+        productImpressionValue,
+
+      /**
+       * Dua field ini sengaja tetap disimpan.
+       *
+       * commissionReal = field utama
+       * realCommission = legacy compatibility
+       */
+      commissionReal:
+        commissionValue,
+
+      realCommission:
+        commissionValue,
+
+      updatedBy:
+        currentUserId,
+
+      updatedAt:
+        serverTimestamp(),
     };
 
-    // Use setDoc with merge for both
-    batch.set(perfRef, {
-      ...perfData,
-      createdBy: existingPerf?.createdBy || currentUserId,
-      createdAt: existingPerf?.createdAt || serverTimestamp(),
-    }, { merge: true });
+    /* --------------------------------------------------------
+       SIMPAN DAILY PERFORMANCE SAJA
+       -------------------------------------------------------- */
 
-    if (commissionValue > 0) {
-      batch.set(txRef, {
-        type: 'INCOME',
-        scope: entry.scope,
-        amount: commissionValue,
-        date: entry.date,
-        category: 'KOMISI TIKTOK',
-        sourceType: 'COMMISSION_REAL',
-        accountName: entry.accountName,
-        accountId: entry.accountId,
-        description: `Komisi Real ${entry.accountName || 'Akun'} (${entry.date})`,
-        performanceId: perfId,
-        referenceId: perfId,
-        status: 'ACTIVE',
-        updatedBy: currentUserId,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    } else if (entry.commissionReal !== undefined || entry.realCommission !== undefined) {
-      // If commission is explicitly set to 0, delete the transaction if it exists
-      batch.delete(txRef);
-    }
+    await setDoc(
+      perfRef,
+      {
+        ...perfData,
 
-    await batch.commit();
+        createdBy:
+          existingPerf?.createdBy ||
+          currentUserId,
+
+        createdAt:
+          existingPerf?.createdAt ||
+          serverTimestamp(),
+      },
+      {
+        merge: true,
+      }
+    );
+
+    /* --------------------------------------------------------
+       AUDIT LOG
+       -------------------------------------------------------- */
 
     await catatAuditLog(
       currentUserId,
       currentUserName,
       'INPUT_KOMISI_REAL',
-      entry.accountName || entry.accountId,
-      `Tanggal: ${entry.date}, GMV: Rp ${gmvValue.toLocaleString('id-ID')}, Estimasi Komisi: Rp ${estCommValue.toLocaleString('id-ID')}, Komisi Real: Rp ${commissionValue.toLocaleString('id-ID')}`
+      entry.accountName ||
+        entry.accountId,
+      `Tanggal: ${entry.date}, GMV: Rp ${gmvValue.toLocaleString(
+        'id-ID'
+      )}, Estimasi Komisi: Rp ${estCommValue.toLocaleString(
+        'id-ID'
+      )}, Komisi Real: Rp ${commissionValue.toLocaleString(
+        'id-ID'
+      )}`
     );
 
+    /**
+     * Return performance document ID.
+     *
+     * Tidak ada transaction ID karena Komisi Real
+     * sekarang bukan transaksi Kas & Bank.
+     */
     return perfId;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, 'dailyPerformance');
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      'dailyPerformance'
+    );
+
     throw error;
   }
 }
 
-// 3. Save Data Omset (GMV & Estimasi Komisi only)
+/* ============================================================
+   5. SAVE DATA OMSET
+   ============================================================ */
+
+/**
+ * Menyimpan:
+ * - GMV
+ * - Estimated Commission
+ * - Item Sold
+ * - Product Impression
+ *
+ * Tidak menyentuh Kas & Bank.
+ */
 export async function saveOmsetData(
   entry: {
     date: string;
@@ -200,60 +422,180 @@ export async function saveOmsetData(
   currentUserName: string
 ) {
   try {
+    /* --------------------------------------------------------
+       VALIDASI
+       -------------------------------------------------------- */
+
     if (!entry.accountId || !entry.date) {
-      throw new Error('AccountId dan Date wajib diisi.');
+      throw new Error(
+        'AccountId dan Date wajib diisi.'
+      );
     }
 
-    const perfId = getPerformanceDocId(entry.accountId, entry.date);
-    const perfRef = doc(db, 'dailyPerformance', perfId);
+    const perfId = getPerformanceDocId(
+      entry.accountId,
+      entry.date
+    );
+
+    const perfRef = doc(
+      db,
+      'dailyPerformance',
+      perfId
+    );
+
+    /* --------------------------------------------------------
+       DATA LAMA
+       -------------------------------------------------------- */
 
     const perfSnap = await getDoc(perfRef);
-    const existingPerf = perfSnap.exists() ? perfSnap.data() : null;
 
-    const gmvValue = Number(entry.gmv) || 0;
-    const estCommValue = Number(entry.estimatedCommission) || 0;
-    const existingComm = Number(existingPerf?.commissionReal) || Number(existingPerf?.realCommission) || 0;
+    const existingPerf = perfSnap.exists()
+      ? perfSnap.data()
+      : null;
+
+    /* --------------------------------------------------------
+       VALUES
+       -------------------------------------------------------- */
+
+    const gmvValue =
+      Number(entry.gmv) || 0;
+
+    const estCommValue =
+      Number(entry.estimatedCommission) || 0;
+
+    /**
+     * Komisi Real adalah milik tab Komisi Real.
+     *
+     * Jangan pernah dihapus ketika owner/employee
+     * mengubah data GMV.
+     */
+    const existingComm =
+      Number(
+        existingPerf?.commissionReal
+      ) ||
+      Number(
+        existingPerf?.realCommission
+      ) ||
+      0;
+
+    /* --------------------------------------------------------
+       PAYLOAD
+       -------------------------------------------------------- */
 
     const payload = {
-      date: entry.date,
-      accountId: entry.accountId,
-      accountName: entry.accountName,
-      scope: entry.scope,
-      gmv: gmvValue,
-      estimatedCommission: estCommValue,
-      itemSold: entry.itemSold !== undefined
-        ? (Number(entry.itemSold) || 0)
-        : (Number(existingPerf?.itemSold) || 0),
-      productImpression: entry.productImpression !== undefined
-        ? (Number(entry.productImpression) || 0)
-        : (Number(existingPerf?.productImpression) || 0),
-      // Komisi Real is owned by the other tab — carry the stored value forward.
-      commissionReal: existingComm,
-      realCommission: existingComm,
-      notes: entry.notes || existingPerf?.notes || '',
-      updatedBy: currentUserId,
-      updatedAt: serverTimestamp(),
-      createdBy: existingPerf?.createdBy || currentUserId,
-      createdAt: existingPerf?.createdAt || serverTimestamp(),
+      date:
+        entry.date,
+
+      accountId:
+        entry.accountId,
+
+      accountName:
+        entry.accountName,
+
+      scope:
+        entry.scope,
+
+      gmv:
+        gmvValue,
+
+      estimatedCommission:
+        estCommValue,
+
+      itemSold:
+        entry.itemSold !== undefined
+          ? Number(entry.itemSold) || 0
+          : Number(existingPerf?.itemSold) || 0,
+
+      productImpression:
+        entry.productImpression !== undefined
+          ? Number(entry.productImpression) || 0
+          : Number(
+              existingPerf?.productImpression
+            ) || 0,
+
+      /**
+       * Preserve existing Komisi Real.
+       */
+      commissionReal:
+        existingComm,
+
+      realCommission:
+        existingComm,
+
+      notes:
+        entry.notes ||
+        existingPerf?.notes ||
+        '',
+
+      updatedBy:
+        currentUserId,
+
+      updatedAt:
+        serverTimestamp(),
+
+      createdBy:
+        existingPerf?.createdBy ||
+        currentUserId,
+
+      createdAt:
+        existingPerf?.createdAt ||
+        serverTimestamp(),
     };
 
-    await setDoc(perfRef, payload, { merge: true });
+    /* --------------------------------------------------------
+       SAVE
+       -------------------------------------------------------- */
+
+    await setDoc(
+      perfRef,
+      payload,
+      {
+        merge: true,
+      }
+    );
+
+    /* --------------------------------------------------------
+       AUDIT
+       -------------------------------------------------------- */
 
     await catatAuditLog(
       currentUserId,
       currentUserName,
       'INPUT_DATA_OMSET',
-      entry.accountName || entry.accountId,
-      `Tanggal: ${entry.date}, GMV: Rp ${gmvValue.toLocaleString('id-ID')}, Estimasi Komisi: Rp ${estCommValue.toLocaleString('id-ID')}, Item Sold: ${payload.itemSold}, Impression: ${payload.productImpression}`
+      entry.accountName ||
+        entry.accountId,
+      `Tanggal: ${entry.date}, GMV: Rp ${gmvValue.toLocaleString(
+        'id-ID'
+      )}, Estimasi Komisi: Rp ${estCommValue.toLocaleString(
+        'id-ID'
+      )}, Item Sold: ${payload.itemSold}, Impression: ${payload.productImpression}`
     );
 
     return perfId;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, 'dailyPerformance');
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      'dailyPerformance'
+    );
+
     throw error;
   }
 }
 
+/* ============================================================
+   6. DELETE KOMISI REAL + LEGACY TRANSACTIONS
+   ============================================================ */
+
+/**
+ * Menghapus data performa.
+ *
+ * Untuk historical data, fungsi ini juga membersihkan
+ * transaction lama yang pernah dibuat oleh sistem versi lama.
+ *
+ * IMPORTANT:
+ * Transaksi Komisi Real BARU tidak dibuat lagi.
+ */
 export async function deleteKomisiRealAtomic(
   performanceId: string,
   desc: string,
@@ -261,43 +603,127 @@ export async function deleteKomisiRealAtomic(
   currentUserName: string
 ) {
   try {
-    const batch = writeBatch(db);
-    const perfRef = doc(db, 'dailyPerformance', performanceId);
-    const txId = getTransactionDocId(performanceId);
-    const txRef = doc(db, TRANSACTIONS_COLLECTION, txId);
-    
-    // Fallback: Delete both the deterministic tx and any transactions matching this performanceId 
-    // just in case they were created before deterministic IDs.
-    const q = query(collection(db, TRANSACTIONS_COLLECTION), where('performanceId', '==', performanceId));
-    const snap = await getDocs(q);
-    snap.docs.forEach(d => {
-      batch.delete(d.ref);
-    });
+    const batch =
+      writeBatch(db);
 
-    batch.delete(perfRef);
-    batch.delete(txRef);
+    /* --------------------------------------------------------
+       PERFORMANCE
+       -------------------------------------------------------- */
+
+    const perfRef = doc(
+      db,
+      'dailyPerformance',
+      performanceId
+    );
+
+    /* --------------------------------------------------------
+       LEGACY DETERMINISTIC TRANSACTION
+       -------------------------------------------------------- */
+
+    const txId =
+      getTransactionDocId(
+        performanceId
+      );
+
+    const txRef = doc(
+      db,
+      'transactions',
+      txId
+    );
+
+    /* --------------------------------------------------------
+       LEGACY TRANSACTION FALLBACK
+       --------------------------------------------------------
+       
+       Cari transaction lama yang menyimpan
+       performanceId.
+       */
+
+    const q = query(
+      collection(
+        db,
+        'transactions'
+      ),
+      where(
+        'performanceId',
+        '==',
+        performanceId
+      )
+    );
+
+    const snap =
+      await getDocs(q);
+
+    snap.docs.forEach(
+      (transactionDoc) => {
+        batch.delete(
+          transactionDoc.ref
+        );
+      }
+    );
+
+    /* --------------------------------------------------------
+       DELETE PERFORMANCE
+       -------------------------------------------------------- */
+
+    batch.delete(
+      perfRef
+    );
+
+    /* --------------------------------------------------------
+       DELETE DETERMINISTIC LEGACY TX
+       -------------------------------------------------------- */
+
+    batch.delete(
+      txRef
+    );
+
+    /* --------------------------------------------------------
+       COMMIT
+       -------------------------------------------------------- */
 
     await batch.commit();
 
+    /* --------------------------------------------------------
+       AUDIT
+       -------------------------------------------------------- */
+
     await catatAuditLog(
-      currentUserId, 
-      currentUserName, 
-      'DELETE_KOMISI_REAL', 
-      performanceId, 
-      `Dihapus beserta transaksinya. Alasan: ${desc}`
+      currentUserId,
+      currentUserName,
+      'DELETE_KOMISI_REAL',
+      performanceId,
+      `Dihapus beserta transaksi legacy. Alasan: ${desc}`
     );
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `dailyPerformance/${performanceId}`);
+    handleFirestoreError(
+      error,
+      OperationType.DELETE,
+      `dailyPerformance/${performanceId}`
+    );
+
     throw error;
   }
 }
 
-// Fallback legacy method
+/* ============================================================
+   7. LEGACY ALIAS
+   ============================================================ */
+
+/**
+ * Dipertahankan agar halaman lama yang masih memanggil
+ * hapusPerformaHarian() tetap berjalan.
+ */
 export async function hapusPerformaHarian(
   id: string,
   desc: string,
   currentUserId: string,
   currentUserName: string
 ) {
-  return deleteKomisiRealAtomic(id, desc, currentUserId, currentUserName);
+  return deleteKomisiRealAtomic(
+    id,
+    desc,
+    currentUserId,
+    currentUserName
+  );
 }
