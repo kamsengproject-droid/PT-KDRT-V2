@@ -1,3 +1,4 @@
+```tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownCircle,
@@ -1068,3 +1069,6 @@ export const ArusKasPage: React.FC = () => {
     </div>
   );
 };
+```
+
+**Copy All → replace `ArusKasPage.tsx` → Save → commit.**
