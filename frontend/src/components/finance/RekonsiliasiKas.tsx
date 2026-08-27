@@ -1,449 +1,1474 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Scale,
   Plus,
   CheckCircle2,
   AlertTriangle,
-  HelpCircle,
-  Clock,
-  Calendar,
   Building2,
-  DollarSign,
-  ArrowRight,
-  TrendingDown,
-  TrendingUp,
+  Landmark,
+  RefreshCw,
+  Lock,
 } from 'lucide-react';
+
 import { useAuth } from '../../context/AuthContext';
+
 import {
   subscribeReconciliations,
   createReconciliation,
   subscribeTransactions,
 } from '../../services/transactionService';
+
 import {
   FinancialReconciliation,
   FinancialTransaction,
   ScopeType,
 } from '../../types';
+
 import {
   formatBulanTahun,
   formatRupiah,
   formatTanggal,
   tanggalHariIni,
-  bulanHariIni,
 } from '../../utils/formatters';
 
-export const RekonsiliasiKas: React.FC = () => {
-  const { userProfile, role, loading: authLoading, currentUser } = useAuth();
-  const [reconciliations, setReconciliations] = useState<FinancialReconciliation[]>([]);
-  const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
-  const [selectedScope, setSelectedScope] = useState<ScopeType | 'ALL'>('ALL');
-  const [selectedMonth, setSelectedMonth] = useState<string>(bulanHariIni());
+type ScopeFilter = ScopeType | 'ALL';
 
-  // Form state
-  const [showModal, setShowModal] = useState<boolean>(false);
-  const [accountName, setAccountName] = useState<string>('Rekening BCA Bisnis Kantor');
-  const [actualBalanceInput, setActualBalanceInput] = useState<number>(0);
-  const [reconcileDate, setReconcileDate] = useState<string>(tanggalHariIni());
-  const [notes, setNotes] = useState<string>('');
-  const [saving, setSaving] = useState<boolean>(false);
+function normalizeAccountName(
+  accountName?: string | null
+) {
+  return (
+    accountName?.trim() ||
+    'Rekening Belum Ditentukan'
+  );
+}
+
+function isExcludedFromBank(
+  transaction: FinancialTransaction
+) {
+  return (
+    transaction.status === 'VOID' ||
+    transaction.sourceType ===
+      'COMMISSION_REAL' ||
+    transaction.sourceType ===
+      'TIKTOK_COMMISSION'
+  );
+}
+
+function getIncomeAmount(
+  transaction: FinancialTransaction
+) {
+  if (
+    transaction.sourceType ===
+    'FUND_TRANSFER'
+  ) {
+    return Number(
+      transaction.netAmount || 0
+    );
+  }
+
+  return Number(
+    transaction.amount || 0
+  );
+}
+
+export const RekonsiliasiKas: React.FC = () => {
+  const {
+    userProfile,
+    role,
+    loading: authLoading,
+    currentUser,
+  } = useAuth();
+
+  const [reconciliations, setReconciliations] =
+    useState<FinancialReconciliation[]>([]);
+
+  const [transactions, setTransactions] =
+    useState<FinancialTransaction[]>([]);
+
+  const [selectedScope, setSelectedScope] =
+    useState<ScopeFilter>('ALL');
+
+  const [selectedAccount, setSelectedAccount] =
+    useState('ALL');
+
+  const [reconcileDate, setReconcileDate] =
+    useState(tanggalHariIni());
+
+  const [showModal, setShowModal] =
+    useState(false);
+
+  const [accountName, setAccountName] =
+    useState('');
+
+  const [actualBalanceInput, setActualBalanceInput] =
+    useState<number>(0);
+
+  const [notes, setNotes] =
+    useState('');
+
+  const [saving, setSaving] =
+    useState(false);
+
+  /*
+   * ============================================================
+   * LOAD DATA
+   * ============================================================
+   */
 
   useEffect(() => {
-    if (authLoading || !currentUser || !userProfile?.active) {
+    if (
+      authLoading ||
+      !currentUser ||
+      !userProfile?.active
+    ) {
       return;
     }
-    const unsubReconcile = subscribeReconciliations(setReconciliations);
-    const unsubTx = subscribeTransactions(
-      {
-        scope: selectedScope,
-        status: 'ACTIVE',
-      },
-      setTransactions
-    );
+
+    const unsubReconciliation =
+      subscribeReconciliations(
+        setReconciliations
+      );
+
+    const unsubTransactions =
+      subscribeTransactions(
+        undefined,
+        setTransactions
+      );
 
     return () => {
-      unsubReconcile();
-      unsubTx();
+      unsubReconciliation();
+      unsubTransactions();
     };
-  }, [authLoading, currentUser?.uid, userProfile?.role, userProfile?.active, selectedScope]);
+  }, [
+    authLoading,
+    currentUser?.uid,
+    userProfile?.active,
+  ]);
 
-  // Hitung saldo sistem kumulatif sampai tanggal/bulan yang dipilih
-  const filteredTxs = transactions.filter((t) => t.date <= reconcileDate && (t.status || 'ACTIVE') === 'ACTIVE');
-  
-  const openingBalance = filteredTxs
-    .filter((t) => t.sourceType === 'OPENING_BALANCE')
-    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-    
-  const totalIncome = filteredTxs
-    .filter((t) => t.type === 'INCOME' && t.sourceType !== 'OPENING_BALANCE')
-    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-    
-  const totalExpense = filteredTxs
-    .filter((t) => t.type === 'EXPENSE')
-    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-    
-  const systemCalculatedBalance = openingBalance + totalIncome - totalExpense;
+  /*
+   * ============================================================
+   * ACTIVE BANK TRANSACTIONS
+   * ============================================================
+   */
 
-  const currentDifference = actualBalanceInput - systemCalculatedBalance;
+  const bankTransactions =
+    useMemo(() => {
+      return transactions.filter(
+        (transaction) => {
+          if (
+            isExcludedFromBank(
+              transaction
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            selectedScope !== 'ALL' &&
+            transaction.scope !==
+              selectedScope
+          ) {
+            return false;
+          }
+
+          if (
+            selectedAccount !== 'ALL'
+          ) {
+            const account =
+              normalizeAccountName(
+                transaction.accountName ||
+                  transaction.toAccount
+              );
+
+            if (
+              account !==
+              selectedAccount
+            ) {
+              return false;
+            }
+          }
+
+          return (
+            transaction.date <=
+            reconcileDate
+          );
+        }
+      );
+    }, [
+      transactions,
+      selectedScope,
+      selectedAccount,
+      reconcileDate,
+    ]);
+
+  /*
+   * ============================================================
+   * ACCOUNT LIST
+   * ============================================================
+   */
+
+  const accountNames =
+    useMemo(() => {
+      const names =
+        new Set<string>();
+
+      transactions.forEach(
+        (transaction) => {
+          if (
+            isExcludedFromBank(
+              transaction
+            )
+          ) {
+            return;
+          }
+
+          const name =
+            normalizeAccountName(
+              transaction.accountName ||
+                transaction.toAccount
+            );
+
+          if (
+            name !==
+            'Rekening Belum Ditentukan'
+          ) {
+            names.add(name);
+          }
+        }
+      );
+
+      return Array.from(names).sort();
+    }, [transactions]);
+
+  /*
+   * ============================================================
+   * SYSTEM BALANCE
+   * ============================================================
+   *
+   * Saldo sistem:
+   *
+   * Saldo Awal
+   * + Uang Masuk
+   * - Uang Keluar
+   *
+   * Komisi Real TIDAK masuk.
+   * Pindah Dana masuk menggunakan NET AMOUNT.
+   */
+
+  const openingBalance =
+    bankTransactions
+      .filter(
+        (transaction) =>
+          transaction.sourceType ===
+          'OPENING_BALANCE'
+      )
+      .reduce(
+        (sum, transaction) =>
+          sum +
+          Number(
+            transaction.amount || 0
+          ),
+        0
+      );
+
+  const totalIncome =
+    bankTransactions
+      .filter(
+        (transaction) =>
+          transaction.type ===
+            'INCOME' &&
+          transaction.sourceType !==
+            'OPENING_BALANCE'
+      )
+      .reduce(
+        (sum, transaction) =>
+          sum +
+          getIncomeAmount(
+            transaction
+          ),
+        0
+      );
+
+  const totalExpense =
+    bankTransactions
+      .filter(
+        (transaction) =>
+          transaction.type ===
+          'EXPENSE'
+      )
+      .reduce(
+        (sum, transaction) =>
+          sum +
+          Number(
+            transaction.amount || 0
+          ),
+        0
+      );
+
+  const systemCalculatedBalance =
+    openingBalance +
+    totalIncome -
+    totalExpense;
+
+  const currentDifference =
+    Number(actualBalanceInput || 0) -
+    systemCalculatedBalance;
+
+  /*
+   * ============================================================
+   * PER ACCOUNT BALANCE
+   * ============================================================
+   */
+
+  const accountBalances =
+    useMemo(() => {
+      const result: Record<
+        string,
+        {
+          accountName: string;
+          scope: ScopeType;
+          opening: number;
+          income: number;
+          expense: number;
+          balance: number;
+        }
+      > = {};
+
+      bankTransactions.forEach(
+        (transaction) => {
+          const name =
+            normalizeAccountName(
+              transaction.accountName ||
+                transaction.toAccount
+            );
+
+          if (
+            name ===
+            'Rekening Belum Ditentukan'
+          ) {
+            return;
+          }
+
+          if (!result[name]) {
+            result[name] = {
+              accountName: name,
+              scope:
+                transaction.scope ===
+                'PRIBADI'
+                  ? 'PRIBADI'
+                  : 'SHARING',
+              opening: 0,
+              income: 0,
+              expense: 0,
+              balance: 0,
+            };
+          }
+
+          if (
+            transaction.sourceType ===
+            'OPENING_BALANCE'
+          ) {
+            result[name].opening +=
+              Number(
+                transaction.amount ||
+                  0
+              );
+          } else if (
+            transaction.type ===
+            'INCOME'
+          ) {
+            result[name].income +=
+              getIncomeAmount(
+                transaction
+              );
+          } else if (
+            transaction.type ===
+            'EXPENSE'
+          ) {
+            result[name].expense +=
+              Number(
+                transaction.amount ||
+                  0
+              );
+          }
+        }
+      );
+
+      Object.values(result).forEach(
+        (account) => {
+          account.balance =
+            account.opening +
+            account.income -
+            account.expense;
+        }
+      );
+
+      return Object.values(result);
+    }, [bankTransactions]);
+
+  /*
+   * ============================================================
+   * SELECTED ACCOUNT BALANCE
+   * ============================================================
+   */
+
+  const selectedAccountBalance =
+    selectedAccount === 'ALL'
+      ? systemCalculatedBalance
+      : accountBalances.find(
+          (account) =>
+            account.accountName ===
+            selectedAccount
+        )?.balance || 0;
+
+  /*
+   * ============================================================
+   * OPEN MODAL
+   * ============================================================
+   */
 
   const handleOpenModal = () => {
-    setActualBalanceInput(systemCalculatedBalance);
-    setReconcileDate(tanggalHariIni());
+    const defaultAccount =
+      selectedAccount !== 'ALL'
+        ? selectedAccount
+        : accountNames[0] || '';
+
+    setAccountName(
+      defaultAccount
+    );
+
+    const account =
+      accountBalances.find(
+        (item) =>
+          item.accountName ===
+          defaultAccount
+      );
+
+    setActualBalanceInput(
+      account
+        ? account.balance
+        : systemCalculatedBalance
+    );
+
+    setReconcileDate(
+      tanggalHariIni()
+    );
+
     setNotes('');
     setShowModal(true);
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!accountName.trim()) {
-      alert('Nama akun / rekening wajib diisi.');
+  /*
+   * ============================================================
+   * MODAL SYSTEM BALANCE
+   * ============================================================
+   */
+
+  const modalSystemBalance =
+    useMemo(() => {
+      if (!accountName.trim()) {
+        return systemCalculatedBalance;
+      }
+
+      return (
+        accountBalances.find(
+          (account) =>
+            account.accountName ===
+            accountName.trim()
+        )?.balance || 0
+      );
+    }, [
+      accountName,
+      accountBalances,
+      systemCalculatedBalance,
+    ]);
+
+  const modalDifference =
+    Number(actualBalanceInput || 0) -
+    modalSystemBalance;
+
+  /*
+   * ============================================================
+   * SAVE RECONCILIATION
+   * ============================================================
+   */
+
+  const handleSave = async (
+    event: React.FormEvent
+  ) => {
+    event.preventDefault();
+
+    if (role !== 'OWNER') {
+      return;
+    }
+
+    if (!currentUser) {
+      alert(
+        'User belum terdeteksi.'
+      );
+      return;
+    }
+
+    if (
+      !accountName.trim()
+    ) {
+      alert(
+        'Nama rekening wajib diisi.'
+      );
       return;
     }
 
     setSaving(true);
+
     try {
+      const uid =
+        userProfile?.uid ||
+        currentUser.uid;
+
+      const name =
+        userProfile?.name ||
+        currentUser.displayName ||
+        'Owner';
+
+      const difference =
+        modalDifference;
+
+      const status =
+        difference === 0
+          ? 'SEIMBANG'
+          : difference > 0
+            ? 'SELISIH_LEBIH'
+            : 'SELISIH_KURANG';
+
       await createReconciliation(
         {
-          date: reconcileDate,
-          periodLabel: formatBulanTahun(reconcileDate.substring(0, 7)),
-          scope: selectedScope,
-          systemBalance: systemCalculatedBalance,
-          actualBalance: Number(actualBalanceInput) || 0,
-          difference: currentDifference,
-          accountName: accountName.trim(),
-          notes: notes.trim(),
-          status:
-            currentDifference === 0
-              ? 'SEIMBANG'
-              : currentDifference > 0
-              ? 'SELISIH_LEBIH'
-              : 'SELISIH_KURANG',
-          createdBy: userProfile?.uid || 'user',
-          createdByName: userProfile?.name || 'Owner',
+          date:
+            reconcileDate,
+
+          periodLabel:
+            formatBulanTahun(
+              reconcileDate.substring(
+                0,
+                7
+              )
+            ),
+
+          scope:
+            selectedScope === 'ALL'
+              ? 'SHARING'
+              : selectedScope,
+
+          systemBalance:
+            modalSystemBalance,
+
+          actualBalance:
+            Number(
+              actualBalanceInput
+            ) || 0,
+
+          difference,
+
+          accountName:
+            accountName.trim(),
+
+          notes:
+            notes.trim(),
+
+          status,
+
+          createdBy:
+            uid,
+
+          createdByName:
+            name,
         },
-        userProfile?.uid || 'user',
-        userProfile?.name || 'Owner'
+        uid,
+        name
       );
+
       setShowModal(false);
-    } catch (err: any) {
-      alert('Gagal menyimpan rekonsiliasi: ' + err.message);
+    } catch (error: any) {
+      console.error(
+        'Gagal menyimpan rekonsiliasi:',
+        error
+      );
+
+      alert(
+        'Gagal menyimpan rekonsiliasi: ' +
+          (
+            error?.message ||
+            'Unknown error'
+          )
+      );
     } finally {
       setSaving(false);
     }
   };
 
-  const accountsPreset = [
-    'Rekening BCA Bisnis Kantor',
-    'Rekening Mandiri Operasional',
-    'Kas Tunai / Cash Studio',
-    'E-Wallet GoPay / OVO Bisnis',
-    'TikTok Shop Payout Balance',
-  ];
+  /*
+   * ============================================================
+   * OWNER ONLY
+   * ============================================================
+   */
+
+  if (
+    role !== 'OWNER'
+  ) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-white p-12 text-center text-zinc-500">
+        <Lock className="mb-3 h-10 w-10 text-zinc-300" />
+
+        <p className="font-bold">
+          Rekonsiliasi Kas & Bank hanya
+          dapat dilakukan oleh Owner.
+        </p>
+      </div>
+    );
+  }
+
+  /*
+   * ============================================================
+   * RENDER
+   * ============================================================
+   */
 
   return (
     <div className="space-y-6">
-      {/* Header Info */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-zinc-200 shadow-2xs">
+
+      {/* HEADER */}
+
+      <div className="flex flex-col justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center">
+
         <div>
+
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-bold text-amber-800 border border-amber-200">
+
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-bold text-amber-800">
+
               <Scale className="h-3.5 w-3.5" />
+
               Rekonsiliasi Kas & Bank
+
             </span>
+
           </div>
-          <h2 className="text-xl font-extrabold text-zinc-900 tracking-tight mt-1">
-            Pencocokan Saldo Buku Kas Sistem vs Rekening / Kas Fisik
+
+          <h2 className="mt-2 text-xl font-black tracking-tight text-zinc-900">
+
+            Cocokkan Saldo Sistem dengan Rekening
+
           </h2>
-          <p className="text-xs text-zinc-500 mt-1 max-w-2xl">
-            Pastikan angka saldo kas yang tercatat pada sistem PT.KDRT sama persis dengan saldo mutasi rekening bank atau brankas fisik kantor.
+
+          <p className="mt-1 max-w-2xl text-xs text-zinc-500">
+
+            Gunakan rekonsiliasi untuk memastikan
+            saldo Kas & Bank di sistem sama dengan
+            saldo rekening bank sebenarnya.
+
           </p>
+
         </div>
 
-        {role === 'OWNER' && (
-          <button
-            onClick={handleOpenModal}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-zinc-800 transition-all shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Rekonsiliasi Baru</span>
-          </button>
+        <button
+          type="button"
+          onClick={handleOpenModal}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-zinc-800"
+        >
+
+          <Plus className="h-4 w-4" />
+
+          Rekonsiliasi Baru
+
+        </button>
+
+      </div>
+
+      {/* FILTER */}
+
+      <div className="flex flex-wrap gap-2">
+
+        {(
+          [
+            ['ALL', 'Semua'],
+            ['SHARING', 'Sharing'],
+            ['PRIBADI', 'Pribadi'],
+          ] as const
+        ).map(
+          ([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() =>
+                setSelectedScope(
+                  value
+                )
+              }
+              className={`rounded-xl px-4 py-2 text-xs font-black ${
+                selectedScope ===
+                value
+                  ? 'bg-zinc-900 text-white'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+              }`}
+            >
+              {label}
+            </button>
+          )
         )}
+
+        <select
+          value={
+            selectedAccount
+          }
+          onChange={(event) =>
+            setSelectedAccount(
+              event.target.value
+            )
+          }
+          className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-xs font-bold text-zinc-700"
+        >
+
+          <option value="ALL">
+            Semua Rekening
+          </option>
+
+          {accountNames.map(
+            (account) => (
+              <option
+                key={account}
+                value={account}
+              >
+                {account}
+              </option>
+            )
+          )}
+
+        </select>
+
       </div>
 
-      {/* Real-time System Balance Overview */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xs">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Total Akumulasi Uang Masuk</span>
-          <p className="text-xl font-extrabold text-emerald-600 mt-1">{formatRupiah(totalIncome)}</p>
-          <span className="text-[11px] text-zinc-500 font-medium">Dari {filteredTxs.filter((t) => t.type === 'INCOME').length} transaksi aktif</span>
+      {/* SUMMARY */}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+
+        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+
+          <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400">
+            Saldo Awal
+          </span>
+
+          <p className="mt-1 text-xl font-black text-zinc-900">
+            {formatRupiah(
+              openingBalance
+            )}
+          </p>
+
         </div>
 
-        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xs">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Total Akumulasi Uang Keluar</span>
-          <p className="text-xl font-extrabold text-rose-600 mt-1">{formatRupiah(totalExpense)}</p>
-          <span className="text-[11px] text-zinc-500 font-medium">Dari {filteredTxs.filter((t) => t.type === 'EXPENSE').length} pengeluaran</span>
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+
+          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">
+            Uang Masuk
+          </span>
+
+          <p className="mt-1 text-xl font-black text-emerald-800">
+            +{' '}
+            {formatRupiah(
+              totalIncome
+            )}
+          </p>
+
         </div>
 
-        <div className="rounded-2xl border border-zinc-900 bg-zinc-900 p-5 text-white shadow-md">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Saldo Buku Kas Sistem Saat Ini</span>
-          <p className="text-2xl font-extrabold text-emerald-400 mt-1">{formatRupiah(systemCalculatedBalance)}</p>
-          <span className="text-[11px] text-zinc-400 font-medium">Status Buku Kas Terkini</span>
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
+
+          <span className="text-[10px] font-black uppercase tracking-wider text-rose-700">
+            Uang Keluar
+          </span>
+
+          <p className="mt-1 text-xl font-black text-rose-800">
+            -{' '}
+            {formatRupiah(
+              totalExpense
+            )}
+          </p>
+
         </div>
+
       </div>
 
-      {/* Riwayat Rekonsiliasi Table */}
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xs">
-        <div className="border-b border-zinc-100 px-6 py-4 flex items-center justify-between">
+      {/* SYSTEM BALANCE */}
+
+      <div className="rounded-3xl bg-zinc-900 p-6 text-white shadow-lg">
+
+        <div className="flex items-center justify-between gap-4">
+
           <div>
-            <h3 className="font-bold text-zinc-900 text-sm">Riwayat Rekonsiliasi Kas</h3>
-            <p className="text-[11px] text-zinc-500 mt-0.5">Catatan berkala hasil pencocokan saldo rekening / kas fisik oleh Owner</p>
+
+            <p className="text-[10px] font-black uppercase tracking-wider text-zinc-400">
+              Saldo Buku Kas Sistem
+            </p>
+
+            <p className="mt-1 text-3xl font-black text-emerald-400">
+              {formatRupiah(
+                selectedAccountBalance
+              )}
+            </p>
+
+            <p className="mt-2 text-xs text-zinc-400">
+
+              {selectedAccount ===
+              'ALL'
+                ? 'Total seluruh rekening'
+                : selectedAccount}
+
+            </p>
+
           </div>
-          <span className="text-xs font-bold text-zinc-400">{reconciliations.length} Rekaman</span>
+
+          <Landmark className="h-8 w-8 text-zinc-500" />
+
+        </div>
+
+      </div>
+
+      {/* ACCOUNT BALANCES */}
+
+      <section>
+
+        <div className="mb-3">
+
+          <h3 className="font-black text-zinc-900">
+            Saldo Sistem per Rekening
+          </h3>
+
+          <p className="text-xs text-zinc-500">
+            Rekonsiliasi dilakukan terhadap saldo
+            rekening yang benar-benar digunakan.
+          </p>
+
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+
+          {accountBalances.length ===
+          0 ? (
+
+            <div className="rounded-2xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400 md:col-span-2">
+              Belum ada transaksi Kas & Bank.
+            </div>
+
+          ) : (
+
+            accountBalances
+              .filter(
+                (account) =>
+                  selectedScope ===
+                    'ALL' ||
+                  account.scope ===
+                    selectedScope
+              )
+              .map(
+                (account) => (
+                  <div
+                    key={
+                      account.accountName
+                    }
+                    className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm"
+                  >
+
+                    <div className="flex items-start justify-between">
+
+                      <div>
+
+                        <div className="flex items-center gap-2">
+
+                          <Building2 className="h-5 w-5 text-indigo-600" />
+
+                          <p className="font-black text-zinc-900">
+                            {
+                              account.accountName
+                            }
+                          </p>
+
+                        </div>
+
+                        <span className="mt-2 inline-block rounded-full bg-zinc-100 px-2 py-1 text-[10px] font-black text-zinc-600">
+                          {account.scope}
+                        </span>
+
+                      </div>
+
+                      <p className="text-lg font-black text-zinc-950">
+                        {formatRupiah(
+                          account.balance
+                        )}
+                      </p>
+
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-3 gap-2 text-[10px]">
+
+                      <div className="rounded-xl bg-zinc-50 p-3">
+
+                        <p className="font-bold text-zinc-400">
+                          Awal
+                        </p>
+
+                        <p className="mt-1 font-black">
+                          {formatRupiah(
+                            account.opening
+                          )}
+                        </p>
+
+                      </div>
+
+                      <div className="rounded-xl bg-emerald-50 p-3">
+
+                        <p className="font-bold text-emerald-600">
+                          Masuk
+                        </p>
+
+                        <p className="mt-1 font-black text-emerald-700">
+                          {formatRupiah(
+                            account.income
+                          )}
+                        </p>
+
+                      </div>
+
+                      <div className="rounded-xl bg-rose-50 p-3">
+
+                        <p className="font-bold text-rose-600">
+                          Keluar
+                        </p>
+
+                        <p className="mt-1 font-black text-rose-700">
+                          {formatRupiah(
+                            account.expense
+                          )}
+                        </p>
+
+                      </div>
+
+                    </div>
+
+                  </div>
+                )
+              )
+
+          )}
+
+        </div>
+
+      </section>
+
+      {/* HISTORY */}
+
+      <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+
+        <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
+
+          <div>
+
+            <h3 className="text-sm font-black text-zinc-900">
+              Riwayat Rekonsiliasi
+            </h3>
+
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              Catatan pencocokan saldo oleh Owner.
+            </p>
+
+          </div>
+
+          <span className="text-xs font-bold text-zinc-400">
+            {reconciliations.length}{' '}
+            Rekaman
+          </span>
+
         </div>
 
         <div className="overflow-x-auto">
+
           <table className="w-full text-left text-xs">
-            <thead className="bg-zinc-50 text-zinc-500 uppercase tracking-wider text-[10px] font-bold border-b border-zinc-100">
+
+            <thead className="border-b border-zinc-100 bg-zinc-50 text-[10px] font-black uppercase tracking-wider text-zinc-500">
+
               <tr>
-                <th className="px-6 py-3">Tanggal & Periode</th>
-                <th className="px-4 py-3">Akun / Rekening</th>
-                <th className="px-4 py-3 text-right">Saldo Sistem</th>
-                <th className="px-4 py-3 text-right">Saldo Aktual Fisik</th>
-                <th className="px-4 py-3 text-right">Selisih</th>
-                <th className="px-4 py-3 text-center">Status</th>
-                <th className="px-6 py-3">Catatan / Petugas</th>
+
+                <th className="px-6 py-3">
+                  Tanggal
+                </th>
+
+                <th className="px-4 py-3">
+                  Rekening
+                </th>
+
+                <th className="px-4 py-3 text-right">
+                  Sistem
+                </th>
+
+                <th className="px-4 py-3 text-right">
+                  Aktual
+                </th>
+
+                <th className="px-4 py-3 text-right">
+                  Selisih
+                </th>
+
+                <th className="px-4 py-3 text-center">
+                  Status
+                </th>
+
+                <th className="px-6 py-3">
+                  Catatan
+                </th>
+
               </tr>
+
             </thead>
-            <tbody className="divide-y divide-zinc-100 text-zinc-700">
-              {reconciliations.length === 0 ? (
+
+            <tbody className="divide-y divide-zinc-100">
+
+              {reconciliations.length ===
+              0 ? (
+
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-zinc-400 font-medium">
-                    Belum ada riwayat rekonsiliasi kas yang dicatat. Klik tombol <strong>[ Rekonsiliasi Baru ]</strong> untuk mencocokkan saldo.
+
+                  <td
+                    colSpan={7}
+                    className="px-6 py-12 text-center text-zinc-400"
+                  >
+                    Belum ada riwayat rekonsiliasi.
                   </td>
+
                 </tr>
+
               ) : (
-                reconciliations.map((item) => (
-                  <tr key={item.id} className="hover:bg-zinc-50/80 transition-colors">
-                    <td className="px-6 py-3.5">
-                      <div className="font-bold text-zinc-900">{formatTanggal(item.date)}</div>
-                      <div className="text-[10px] text-zinc-500 font-medium">{item.periodLabel}</div>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="font-bold text-zinc-800 flex items-center gap-1.5">
-                        <Building2 className="h-3.5 w-3.5 text-zinc-400" />
-                        {item.accountName}
-                      </div>
-                      <div className="text-[10px] text-zinc-400 font-semibold">Scope: {item.scope}</div>
-                    </td>
-                    <td className="px-4 py-3.5 text-right font-medium text-zinc-700">
-                      {formatRupiah(item.systemBalance)}
-                    </td>
-                    <td className="px-4 py-3.5 text-right font-bold text-zinc-900">
-                      {formatRupiah(item.actualBalance)}
-                    </td>
-                    <td
-                      className={`px-4 py-3.5 text-right font-extrabold ${
-                        item.difference === 0
-                          ? 'text-emerald-600'
-                          : item.difference > 0
-                          ? 'text-blue-600'
-                          : 'text-rose-600'
-                      }`}
+
+                reconciliations.map(
+                  (item) => (
+                    <tr
+                      key={item.id}
+                      className="hover:bg-zinc-50"
                     >
-                      {item.difference === 0
-                        ? 'Rp 0'
-                        : item.difference > 0
-                        ? `+${formatRupiah(item.difference)}`
-                        : `-${formatRupiah(Math.abs(item.difference))}`}
-                    </td>
-                    <td className="px-4 py-3.5 text-center">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                          item.status === 'SEIMBANG'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                            : item.status === 'SELISIH_LEBIH'
-                            ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                            : 'bg-rose-100 text-rose-800 border border-rose-200'
+
+                      <td className="px-6 py-3.5">
+
+                        <p className="font-bold text-zinc-900">
+                          {formatTanggal(
+                            item.date
+                          )}
+                        </p>
+
+                        <p className="text-[10px] text-zinc-400">
+                          {
+                            item.periodLabel
+                          }
+                        </p>
+
+                      </td>
+
+                      <td className="px-4 py-3.5">
+
+                        <p className="flex items-center gap-1.5 font-bold text-zinc-800">
+
+                          <Building2 className="h-3.5 w-3.5 text-zinc-400" />
+
+                          {
+                            item.accountName
+                          }
+
+                        </p>
+
+                        <p className="text-[10px] text-zinc-400">
+                          {item.scope}
+                        </p>
+
+                      </td>
+
+                      <td className="px-4 py-3.5 text-right font-bold">
+                        {formatRupiah(
+                          item.systemBalance
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3.5 text-right font-black">
+                        {formatRupiah(
+                          item.actualBalance
+                        )}
+                      </td>
+
+                      <td
+                        className={`px-4 py-3.5 text-right font-black ${
+                          item.difference ===
+                          0
+                            ? 'text-emerald-600'
+                            : item.difference >
+                                0
+                              ? 'text-blue-600'
+                              : 'text-rose-600'
                         }`}
                       >
-                        {item.status === 'SEIMBANG' ? (
-                          <>
-                            <CheckCircle2 className="h-3 w-3" />
-                            SEIMBANG
-                          </>
-                        ) : item.status === 'SELISIH_LEBIH' ? (
-                          <>
-                            <TrendingUp className="h-3 w-3" />
-                            SURPLUS FISIK
-                          </>
-                        ) : (
-                          <>
-                            <AlertTriangle className="h-3 w-3" />
-                            DEFISIT FISIK
-                          </>
-                        )}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3.5">
-                      <p className="text-zinc-800 font-medium line-clamp-1">{item.notes || '-'}</p>
-                      <span className="text-[10px] text-zinc-400">Oleh: {item.createdByName || 'Owner'}</span>
-                    </td>
-                  </tr>
-                ))
+
+                        {item.difference ===
+                        0
+                          ? 'Rp 0'
+                          : item.difference >
+                              0
+                            ? `+${formatRupiah(
+                                item.difference
+                              )}`
+                            : `-${formatRupiah(
+                                Math.abs(
+                                  item.difference
+                                )
+                              )}`}
+
+                      </td>
+
+                      <td className="px-4 py-3.5 text-center">
+
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-black ${
+                            item.status ===
+                            'SEIMBANG'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : item.status ===
+                                  'SELISIH_LEBIH'
+                                ? 'border-blue-200 bg-blue-50 text-blue-700'
+                                : 'border-rose-200 bg-rose-50 text-rose-700'
+                          }`}
+                        >
+
+                          {item.status ===
+                          'SEIMBANG' ? (
+                            <>
+                              <CheckCircle2 className="h-3 w-3" />
+                              SEIMBANG
+                            </>
+                          ) : (
+                            <>
+                              <AlertTriangle className="h-3 w-3" />
+
+                              {item.status ===
+                              'SELISIH_LEBIH'
+                                ? 'SURPLUS'
+                                : 'DEFISIT'}
+                            </>
+                          )}
+
+                        </span>
+
+                      </td>
+
+                      <td className="max-w-[240px] px-6 py-3.5">
+
+                        <p className="truncate font-medium text-zinc-700">
+                          {item.notes ||
+                            '-'}
+                        </p>
+
+                        <p className="mt-1 text-[10px] text-zinc-400">
+                          Oleh:{' '}
+                          {item.createdByName ||
+                            'Owner'}
+                        </p>
+
+                      </td>
+
+                    </tr>
+                  )
+                )
+
               )}
+
             </tbody>
+
           </table>
+
         </div>
+
       </div>
 
-      {/* Modal Input Rekonsiliasi */}
+      {/* MODAL */}
+
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-zinc-200">
-            <div className="flex items-center justify-between border-b border-zinc-100 pb-3 mb-4">
+
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+
+          <div className="w-full max-w-lg rounded-3xl border border-zinc-200 bg-white p-6 shadow-2xl">
+
+            <div className="mb-5 flex items-start justify-between border-b border-zinc-100 pb-4">
+
               <div>
-                <h3 className="text-base font-extrabold text-zinc-900 flex items-center gap-2">
+
+                <h3 className="flex items-center gap-2 text-base font-black text-zinc-900">
+
                   <Scale className="h-5 w-5 text-amber-600" />
-                  Form Rekonsiliasi Saldo Kas
+
+                  Rekonsiliasi Saldo Rekening
+
                 </h3>
-                <p className="text-xs text-zinc-500 mt-0.5">Bandingkan saldo pembukuan sistem dengan rekening bank / kas tunai.</p>
+
+                <p className="mt-1 text-xs text-zinc-500">
+                  Bandingkan saldo sistem dengan
+                  saldo aktual rekening.
+                </p>
+
               </div>
+
               <button
-                onClick={() => setShowModal(false)}
-                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-100"
+                type="button"
+                onClick={() =>
+                  setShowModal(false)
+                }
+                className="rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-100"
               >
                 ✕
               </button>
+
             </div>
 
-            <form onSubmit={handleSave} className="space-y-4 text-xs">
+            <form
+              onSubmit={handleSave}
+              className="space-y-4"
+            >
+
               <div className="grid grid-cols-2 gap-3">
+
                 <div>
-                  <label className="block font-bold text-zinc-700 mb-1">Tanggal Cut-Off</label>
+
+                  <label className="mb-1 block text-xs font-bold text-zinc-700">
+                    Tanggal Cut-Off
+                  </label>
+
                   <input
                     type="date"
                     required
-                    value={reconcileDate}
-                    onChange={(e) => setReconcileDate(e.target.value)}
-                    className="w-full rounded-xl border border-zinc-300 p-2.5 font-medium"
+                    value={
+                      reconcileDate
+                    }
+                    onChange={(event) =>
+                      setReconcileDate(
+                        event.target.value
+                      )
+                    }
+                    className="w-full rounded-xl border border-zinc-300 p-2.5 text-xs font-semibold"
                   />
+
                 </div>
+
                 <div>
-                  <label className="block font-bold text-zinc-700 mb-1">Scope</label>
+
+                  <label className="mb-1 block text-xs font-bold text-zinc-700">
+                    Scope
+                  </label>
+
                   <select
-                    value={selectedScope}
-                    onChange={(e) => setSelectedScope(e.target.value as any)}
-                    className="w-full rounded-xl border border-zinc-300 p-2.5 font-bold"
+                    value={
+                      selectedScope ===
+                      'ALL'
+                        ? 'SHARING'
+                        : selectedScope
+                    }
+                    onChange={(event) =>
+                      setSelectedScope(
+                        event.target
+                          .value as ScopeType
+                      )
+                    }
+                    className="w-full rounded-xl border border-zinc-300 p-2.5 text-xs font-bold"
                   >
-                    
-                    <option value="SHARING">SHARING</option>
-                    <option value="PRIBADI">PRIBADI</option>
+
+                    <option value="SHARING">
+                      SHARING
+                    </option>
+
+                    <option value="PRIBADI">
+                      PRIBADI
+                    </option>
+
                   </select>
+
                 </div>
+
               </div>
 
               <div>
-                <label className="block font-bold text-zinc-700 mb-1">Nama Akun / Rekening Bank / Kas</label>
-                <input
-                  type="text"
+
+                <label className="mb-1 block text-xs font-bold text-zinc-700">
+                  Rekening
+                </label>
+
+                <select
                   required
-                  list="accounts-list"
                   value={accountName}
-                  onChange={(e) => setAccountName(e.target.value)}
-                  placeholder="Pilih atau ketik nama rekening/brankas"
-                  className="w-full rounded-xl border border-zinc-300 p-2.5 font-medium text-zinc-900"
-                />
-                <datalist id="accounts-list">
-                  {accountsPreset.map((acc) => (
-                    <option key={acc} value={acc} />
-                  ))}
-                </datalist>
+                  onChange={(event) =>
+                    setAccountName(
+                      event.target.value
+                    )
+                  }
+                  className="w-full rounded-xl border border-zinc-300 p-2.5 text-xs font-bold"
+                >
+
+                  <option value="">
+                    Pilih rekening
+                  </option>
+
+                  {accountNames.map(
+                    (account) => (
+                      <option
+                        key={account}
+                        value={account}
+                      >
+                        {account}
+                      </option>
+                    )
+                  )}
+
+                </select>
+
               </div>
 
-              {/* Komparasi Nilai */}
-              <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 space-y-3">
-                <div className="flex items-center justify-between text-zinc-600">
-                  <span className="font-semibold">Saldo Terhitung Sistem:</span>
-                  <span className="font-extrabold text-zinc-900 text-sm">
-                    {formatRupiah(systemCalculatedBalance)}
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+
+                <div className="flex items-center justify-between">
+
+                  <span className="text-xs font-bold text-zinc-500">
+                    Saldo Sistem
                   </span>
+
+                  <span className="font-black text-zinc-900">
+                    {formatRupiah(
+                      modalSystemBalance
+                    )}
+                  </span>
+
                 </div>
 
-                <div>
-                  <label className="block font-bold text-zinc-800 mb-1">
-                    Saldo Aktual di Rekening / Fisik (Rp)
+                <div className="mt-4">
+
+                  <label className="mb-1 block text-xs font-black text-zinc-800">
+                    Saldo Aktual Rekening
                   </label>
+
                   <input
                     type="number"
+                    min="0"
                     required
-                    value={actualBalanceInput}
-                    onChange={(e) => setActualBalanceInput(Number(e.target.value))}
-                    className="w-full rounded-xl border border-zinc-300 bg-white p-2.5 font-extrabold text-base text-zinc-900 focus:ring-2 focus:ring-amber-500"
+                    value={
+                      actualBalanceInput
+                    }
+                    onChange={(event) =>
+                      setActualBalanceInput(
+                        Number(
+                          event.target.value
+                        )
+                      )
+                    }
+                    className="w-full rounded-xl border-2 border-zinc-300 bg-white p-3 text-lg font-black focus:border-amber-500 focus:outline-none"
                   />
+
                 </div>
 
-                {/* Selisih Box */}
                 <div
-                  className={`rounded-lg p-3 border flex items-center justify-between ${
-                    currentDifference === 0
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                      : currentDifference > 0
-                      ? 'bg-blue-50 border-blue-200 text-blue-900'
-                      : 'bg-rose-50 border-rose-200 text-rose-900'
+                  className={`mt-3 flex items-center justify-between rounded-xl border p-3 ${
+                    modalDifference ===
+                    0
+                      ? 'border-emerald-200 bg-emerald-50'
+                      : modalDifference >
+                          0
+                        ? 'border-blue-200 bg-blue-50'
+                        : 'border-rose-200 bg-rose-50'
                   }`}
                 >
+
                   <div className="flex items-center gap-2">
-                    {currentDifference === 0 ? (
+
+                    {modalDifference ===
+                    0 ? (
                       <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                     ) : (
                       <AlertTriangle className="h-4 w-4 text-rose-600" />
                     )}
-                    <span className="font-bold">
-                      {currentDifference === 0
-                        ? 'Saldo Klop (SEIMBANG)'
-                        : currentDifference > 0
-                        ? 'Surplus Fisik (Lebih)'
-                        : 'Defisit Fisik (Kurang)'}
+
+                    <span className="text-xs font-black">
+                      {modalDifference ===
+                      0
+                        ? 'SEIMBANG'
+                        : modalDifference >
+                            0
+                          ? 'SALDO FISIK LEBIH'
+                          : 'SALDO FISIK KURANG'}
                     </span>
+
                   </div>
-                  <span className="font-extrabold text-sm">
-                    {currentDifference === 0
-                      ? 'Selisih Rp 0'
-                      : `${currentDifference > 0 ? '+' : ''}${formatRupiah(currentDifference)}`}
+
+                  <span className="text-sm font-black">
+                    {modalDifference ===
+                    0
+                      ? 'Rp 0'
+                      : formatRupiah(
+                          modalDifference
+                        )}
                   </span>
+
                 </div>
+
               </div>
 
               <div>
-                <label className="block font-bold text-zinc-700 mb-1">Catatan Rekonsiliasi (Opsional)</label>
+
+                <label className="mb-1 block text-xs font-bold text-zinc-700">
+                  Catatan
+                </label>
+
                 <textarea
-                  rows={2}
+                  rows={3}
                   value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Contoh: Ada biaya admin bank belum tercatat / Klop sesuai mutasi BCA"
-                  className="w-full rounded-xl border border-zinc-300 p-2.5 font-medium"
+                  onChange={(event) =>
+                    setNotes(
+                      event.target.value
+                    )
+                  }
+                  placeholder="Contoh: Saldo sesuai mutasi BCA."
+                  className="w-full rounded-xl border border-zinc-300 p-2.5 text-xs"
                 />
+
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-zinc-100">
+              <div className="flex justify-end gap-2 border-t border-zinc-100 pt-4">
+
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
-                  className="rounded-xl border border-zinc-200 px-4 py-2 font-semibold text-zinc-600 hover:bg-zinc-100"
+                  onClick={() =>
+                    setShowModal(false)
+                  }
+                  className="rounded-xl border border-zinc-200 px-4 py-2.5 text-xs font-bold text-zinc-600 hover:bg-zinc-100"
                 >
                   Batal
                 </button>
+
                 <button
                   type="submit"
                   disabled={saving}
-                  className="rounded-xl bg-zinc-900 px-5 py-2 font-bold text-white hover:bg-zinc-800 disabled:opacity-50 shadow-sm"
+                  className="rounded-xl bg-zinc-900 px-5 py-2.5 text-xs font-black text-white hover:bg-zinc-800 disabled:opacity-50"
                 >
-                  {saving ? 'Menyimpan...' : 'Simpan Rekonsiliasi'}
+                  {saving
+                    ? 'MENYIMPAN...'
+                    : 'SIMPAN REKONSILIASI'}
                 </button>
+
               </div>
+
             </form>
+
           </div>
+
         </div>
+
       )}
+
     </div>
   );
 };
