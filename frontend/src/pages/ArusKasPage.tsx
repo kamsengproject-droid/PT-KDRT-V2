@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Wallet,
   Plus,
@@ -10,6 +10,7 @@ import {
   Building,
   Sparkles,
   ArrowRightLeft,
+  Landmark,
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
@@ -30,127 +31,227 @@ import {
 } from '../utils/formatters';
 
 export const ArusKasPage: React.FC = () => {
-  const {
-    userProfile,
-    role,
-    currentUser,
-  } = useAuth();
+  const { userProfile, role, currentUser } = useAuth();
 
-  const [selectedMonth, setSelectedMonth] =
-    useState<string>(bulanHariIni());
+  const [selectedMonth, setSelectedMonth] = useState<string>(
+    bulanHariIni()
+  );
 
-  const [searchQuery, setSearchQuery] =
-    useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const [transactions, setTransactions] =
-    useState<FinancialTransaction[]>([]);
+  const [transactions, setTransactions] = useState<
+    FinancialTransaction[]
+  >([]);
 
-  const [loading, setLoading] =
-    useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(true);
 
-  // Delete modal
   const [showDeleteModal, setShowDeleteModal] =
     useState<boolean>(false);
 
   const [selectedTxForDelete, setSelectedTxForDelete] =
     useState<FinancialTransaction | null>(null);
 
-  const [deleteReason, setDeleteReason] =
-    useState<string>('');
+  const [deleteReason, setDeleteReason] = useState<string>('');
 
-  const [submitting, setSubmitting] =
-    useState<boolean>(false);
+  const [submitting, setSubmitting] = useState<boolean>(false);
 
-  // Detail modal
   const [showDetailModal, setShowDetailModal] =
     useState<boolean>(false);
 
   const [selectedTxDetail, setSelectedTxDetail] =
     useState<FinancialTransaction | null>(null);
 
-  /* ============================================================
-     LOAD TRANSACTIONS
-  ============================================================ */
+  /*
+   * ============================================================
+   * LOAD TRANSACTIONS
+   * ============================================================
+   *
+   * Kita ambil seluruh transaksi sampai akhir bulan yang dipilih.
+   *
+   * Kenapa tidak hanya bulan yang dipilih?
+   *
+   * Karena SALDO REKENING adalah saldo kumulatif.
+   *
+   * Contoh:
+   *
+   * Saldo awal Januari       Rp10 jt
+   * Uang masuk Januari       Rp 5 jt
+   * Uang keluar Januari      Rp 2 jt
+   * Uang masuk Februari      Rp 3 jt
+   *
+   * Saldo Februari            Rp16 jt
+   *
+   * Jadi saldo tidak boleh dihitung
+   * hanya dari transaksi Februari.
+   */
 
   useEffect(() => {
     setLoading(true);
 
-    const startDate = `${selectedMonth}-01`;
+    const startDate = '2000-01-01';
 
-    const [year, month] =
-      selectedMonth
-        .split('-')
-        .map(Number);
+    const [year, month] = selectedMonth
+      .split('-')
+      .map(Number);
 
-    const lastDay =
-      new Date(
-        year,
-        month,
-        0
-      ).getDate();
+    const lastDay = new Date(
+      year,
+      month,
+      0
+    ).getDate();
 
-    const endDate =
-      `${selectedMonth}-${lastDay}`;
+    const endDate = `${selectedMonth}-${lastDay}`;
 
-    const unsub =
-      subscribeTransactions(
-        {
-          startDate,
-          endDate,
-        },
-        (data) => {
-          /*
-           * Hanya transaksi aktif yang dihitung.
-           */
-          const activeTransactions =
-            data.filter(
-              (tx) =>
-                tx.status !== 'VOID'
-            );
+    const unsub = subscribeTransactions(
+      {
+        startDate,
+        endDate,
+      },
+      (data) => {
+        /*
+         * VOID tidak mempengaruhi saldo.
+         */
+        const activeTransactions = data.filter(
+          (tx) => tx.status !== 'VOID'
+        );
 
-          /*
-           * KOMISI REAL BUKAN KAS BANK.
-           *
-           * Historical transaction lama dengan:
-           *
-           * COMMISSION_REAL
-           * TIKTOK_COMMISSION
-           *
-           * tidak boleh dihitung sebagai uang bank.
-           *
-           * Data performa Komisi Real tetap berada
-           * di dailyPerformance.
-           */
-          const bankTransactions =
-            activeTransactions.filter(
-              (tx) => {
-                if (
-                  tx.sourceType ===
-                    'COMMISSION_REAL' ||
-                  tx.sourceType ===
-                    'TIKTOK_COMMISSION'
-                ) {
-                  return false;
-                }
+        /*
+         * KOMISI REAL BUKAN UANG BANK.
+         *
+         * Historical transaction lama dengan sourceType
+         * COMMISSION_REAL / TIKTOK_COMMISSION
+         * tidak dihitung sebagai cash.
+         */
+        const bankTransactions =
+          activeTransactions.filter((tx) => {
+            if (
+              tx.sourceType === 'COMMISSION_REAL' ||
+              tx.sourceType === 'TIKTOK_COMMISSION'
+            ) {
+              return false;
+            }
 
-                return true;
-              }
-            );
+            return true;
+          });
 
-          setTransactions(
-            bankTransactions
-          );
-
-          setLoading(false);
-        }
-      );
+        setTransactions(bankTransactions);
+        setLoading(false);
+      }
+    );
 
     return () => unsub();
   }, [selectedMonth]);
 
-  /* ============================================================
-     DELETE
-  ============================================================ */
+  /*
+   * ============================================================
+   * CASHFLOW HELPERS
+   * ============================================================
+   */
+
+  const getIncomeAmount = (
+    tx: FinancialTransaction
+  ) => {
+    if (tx.type === 'INCOME') {
+      return Number(tx.amount || 0);
+    }
+
+    /*
+     * Pindah Dana:
+     * yang benar-benar masuk rekening adalah netAmount.
+     */
+    if (tx.type === 'TRANSFER') {
+      return Number(
+        tx.netAmount ??
+          tx.amount ??
+          0
+      );
+    }
+
+    return 0;
+  };
+
+  const getExpenseAmount = (
+    tx: FinancialTransaction
+  ) => {
+    if (tx.type === 'EXPENSE') {
+      return Number(tx.amount || 0);
+    }
+
+    return 0;
+  };
+
+  /*
+   * ============================================================
+   * TOTAL SALDO REKENING
+   * ============================================================
+   */
+
+  const totalBankIncome = useMemo(() => {
+    return transactions.reduce(
+      (total, tx) =>
+        total + getIncomeAmount(tx),
+      0
+    );
+  }, [transactions]);
+
+  const totalBankExpense = useMemo(() => {
+    return transactions.reduce(
+      (total, tx) =>
+        total + getExpenseAmount(tx),
+      0
+    );
+  }, [transactions]);
+
+  /*
+   * Untuk saat ini saldo rekening dihitung dari transaksi
+   * yang sudah tersimpan.
+   *
+   * Saldo Awal nantinya bisa kita integrasikan lebih dalam
+   * dengan collection saldo awal jika struktur service-nya
+   * sudah siap.
+   */
+  const totalBankBalance =
+    totalBankIncome -
+    totalBankExpense;
+
+  /*
+   * ============================================================
+   * TRANSACTIONS OF SELECTED MONTH
+   * ============================================================
+   */
+
+  const monthlyTransactions = useMemo(() => {
+    return transactions.filter((tx) =>
+      String(tx.date || '').startsWith(
+        selectedMonth
+      )
+    );
+  }, [
+    transactions,
+    selectedMonth,
+  ]);
+
+  const monthlyIncome = useMemo(() => {
+    return monthlyTransactions.reduce(
+      (total, tx) =>
+        total + getIncomeAmount(tx),
+      0
+    );
+  }, [monthlyTransactions]);
+
+  const monthlyExpense = useMemo(() => {
+    return monthlyTransactions.reduce(
+      (total, tx) =>
+        total + getExpenseAmount(tx),
+      0
+    );
+  }, [monthlyTransactions]);
+
+  /*
+   * ============================================================
+   * DELETE
+   * ============================================================
+   */
 
   const handleDeleteClick = (
     tx: FinancialTransaction
@@ -168,69 +269,66 @@ export const ArusKasPage: React.FC = () => {
     setShowDeleteModal(true);
   };
 
-  const handleConfirmDelete =
-    async () => {
+  const handleConfirmDelete = async () => {
+    if (
+      !selectedTxForDelete ||
+      !currentUser ||
+      !userProfile
+    ) {
+      return;
+    }
+
+    if (!deleteReason.trim()) {
+      alert(
+        'Alasan penghapusan wajib diisi.'
+      );
+
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
       if (
-        !selectedTxForDelete ||
-        !currentUser ||
-        !userProfile
+        selectedTxForDelete.sourceType ===
+          'COMMISSION_REAL' &&
+        selectedTxForDelete.performanceId
       ) {
-        return;
-      }
-
-      if (!deleteReason.trim()) {
-        alert(
-          'Alasan penghapusan wajib diisi.'
+        await deleteKomisiRealAtomic(
+          selectedTxForDelete.performanceId,
+          deleteReason,
+          currentUser.uid,
+          userProfile.name
         );
-
-        return;
-      }
-
-      setSubmitting(true);
-
-      try {
-        /*
-         * Historical Commission Real
-         * tetap dapat dihapus secara atomic.
-         */
-        if (
-          selectedTxForDelete.sourceType ===
-            'COMMISSION_REAL' &&
-          selectedTxForDelete.performanceId
-        ) {
-          await deleteKomisiRealAtomic(
-            selectedTxForDelete.performanceId,
-            deleteReason,
-            currentUser.uid,
-            userProfile.name
-          );
-        } else {
-          await deleteTransaction(
-            selectedTxForDelete.id!,
-            selectedTxForDelete,
-            deleteReason,
-            currentUser.uid,
-            userProfile.name
-          );
-        }
-
-        setShowDeleteModal(false);
-        setSelectedTxForDelete(null);
-      } catch (error: any) {
-        console.error(error);
-
-        alert(
-          error?.message ||
-            'Gagal menghapus transaksi.'
+      } else {
+        await deleteTransaction(
+          selectedTxForDelete.id!,
+          selectedTxForDelete,
+          deleteReason,
+          currentUser.uid,
+          userProfile.name
         );
-      } finally {
-        setSubmitting(false);
       }
-    };
 
-  /* ============================================================
-     RENDER CASHFLOW SECTION
-  ============================================================ */
+      setShowDeleteModal(false);
+      setSelectedTxForDelete(null);
+    } catch (error: any) {
+      console.error(error);
+
+      alert(
+        error?.message ||
+          'Gagal menghapus transaksi.'
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /*
+   * ============================================================
+   * SECTION
+   * ============================================================
+   */
 
   const renderSection = (
     scope: ScopeType,
@@ -244,7 +342,7 @@ export const ArusKasPage: React.FC = () => {
         .toLowerCase();
 
     const filtered =
-      transactions.filter(
+      monthlyTransactions.filter(
         (tx) => {
           const matchScope =
             tx.scope === scope;
@@ -274,59 +372,24 @@ export const ArusKasPage: React.FC = () => {
         }
       );
 
-    /* ==========================================================
-       CASHFLOW CALCULATION
-
-       INCOME:
-       amount
-
-       TRANSFER:
-       netAmount
-
-       EXPENSE:
-       amount
-    ========================================================== */
-
     let totalIncome = 0;
     let totalExpense = 0;
 
     filtered.forEach((tx) => {
-      if (
-        tx.type === 'INCOME'
-      ) {
-        totalIncome +=
-          Number(
-            tx.amount || 0
-          );
-      }
+      totalIncome +=
+        getIncomeAmount(tx);
 
-      if (
-        tx.type === 'TRANSFER'
-      ) {
-        totalIncome +=
-          Number(
-            tx.netAmount ??
-              tx.amount ??
-              0
-          );
-      }
-
-      if (
-        tx.type === 'EXPENSE'
-      ) {
-        totalExpense +=
-          Number(
-            tx.amount || 0
-          );
-      }
+      totalExpense +=
+        getExpenseAmount(tx);
     });
 
     return (
       <div className="mb-10">
 
-        {/* SECTION HEADER */}
+        {/* HEADER */}
 
         <div className="mb-4 flex items-center gap-2 border-b border-zinc-200 pb-2">
+
           {icon}
 
           <h2
@@ -334,60 +397,86 @@ export const ArusKasPage: React.FC = () => {
           >
             {title}
           </h2>
+
         </div>
 
         {/* SUMMARY */}
 
-        <div className="mb-6 grid grid-cols-2 gap-4">
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
 
-          {/* UANG MASUK */}
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
 
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-            <span className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase text-emerald-600">
+            <span className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase text-emerald-700">
+
               <Plus className="h-4 w-4" />
 
-              UANG MASUK (
-              {formatBulanTahun(
-                selectedMonth
-              )}
-              )
+              UANG MASUK
+
             </span>
 
             <span className="text-2xl font-black text-emerald-900">
+
               {formatRupiah(
                 totalIncome
               )}
+
             </span>
+
           </div>
 
-          {/* UANG KELUAR */}
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
 
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-            <span className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase text-rose-600">
+            <span className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase text-rose-700">
+
               <Minus className="h-4 w-4" />
 
-              UANG KELUAR (
-              {formatBulanTahun(
-                selectedMonth
-              )}
-              )
+              UANG KELUAR
+
             </span>
 
             <span className="text-2xl font-black text-rose-900">
+
               {formatRupiah(
                 totalExpense
               )}
+
             </span>
+
           </div>
+
+          <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5">
+
+            <span className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase text-indigo-700">
+
+              <Wallet className="h-4 w-4" />
+
+              NET CASHFLOW
+
+            </span>
+
+            <span className="text-2xl font-black text-indigo-900">
+
+              {formatRupiah(
+                totalIncome -
+                  totalExpense
+              )}
+
+            </span>
+
+          </div>
+
         </div>
 
-        {/* TRANSACTION TABLE */}
+        {/* TABLE */}
 
         <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+
           <div className="overflow-x-auto">
+
             <table className="w-full text-left text-xs text-zinc-600">
 
               <thead className="border-b border-zinc-200 bg-zinc-50">
+
                 <tr>
 
                   <th className="px-5 py-3.5 font-extrabold text-zinc-900">
@@ -415,6 +504,7 @@ export const ArusKasPage: React.FC = () => {
                   </th>
 
                 </tr>
+
               </thead>
 
               <tbody className="divide-y divide-zinc-100">
@@ -422,6 +512,7 @@ export const ArusKasPage: React.FC = () => {
                 {filtered.length === 0 ? (
 
                   <tr>
+
                     <td
                       colSpan={6}
                       className="px-5 py-8 text-center font-medium text-zinc-400"
@@ -430,198 +521,272 @@ export const ArusKasPage: React.FC = () => {
                         ? 'MEMUAT DATA...'
                         : 'BELUM ADA DATA TRANSAKSI'}
                     </td>
+
                   </tr>
 
                 ) : (
 
-                  filtered.map(
-                    (tx) => {
+                  filtered.map((tx) => {
 
-                      const incomeAmount =
-                        tx.type ===
-                        'INCOME'
-                          ? Number(
-                              tx.amount ||
-                                0
-                            )
-                          : tx.type ===
-                              'TRANSFER'
-                            ? Number(
-                                tx.netAmount ??
-                                  tx.amount ??
-                                  0
-                              )
-                            : 0;
+                    const incomeAmount =
+                      getIncomeAmount(tx);
 
-                      const expenseAmount =
-                        tx.type ===
-                        'EXPENSE'
-                          ? Number(
-                              tx.amount ||
-                                0
-                            )
-                          : 0;
+                    const expenseAmount =
+                      getExpenseAmount(tx);
 
-                      return (
-                        <tr
-                          key={tx.id}
-                          className="hover:bg-zinc-50"
+                    return (
+                      <tr
+                        key={tx.id}
+                        className="hover:bg-zinc-50"
+                      >
+
+                        <td className="whitespace-nowrap px-5 py-3.5 font-medium text-zinc-900">
+
+                          {formatTanggal(
+                            tx.date
+                          )}
+
+                        </td>
+
+                        <td className="px-5 py-3.5 font-bold text-zinc-700">
+
+                          {tx.category}
+
+                          {tx.type ===
+                            'TRANSFER' && (
+                            <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+
+                              PINDAH DANA
+
+                            </span>
+                          )}
+
+                        </td>
+
+                        <td
+                          className="max-w-[320px] truncate px-5 py-3.5 text-zinc-500"
+                          title={
+                            tx.description
+                          }
                         >
 
-                          {/* DATE */}
+                          {tx.description}
 
-                          <td className="whitespace-nowrap px-5 py-3.5 font-medium text-zinc-900">
-                            {formatTanggal(
-                              tx.date
-                            )}
-                          </td>
+                          {tx.accountName && (
+                            <span className="ml-1 font-semibold text-emerald-600">
 
-                          {/* CATEGORY */}
+                              [
+                              {
+                                tx.accountName
+                              }
+                              ]
 
-                          <td className="px-5 py-3.5 font-bold text-zinc-700">
+                            </span>
+                          )}
 
-                            {tx.category}
+                          {tx.type ===
+                            'TRANSFER' && (
+                            <span className="ml-1 font-semibold text-indigo-600">
 
-                            {tx.type ===
-                              'TRANSFER' && (
-                              <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] text-indigo-700">
-                                PINDAH DANA
-                              </span>
-                            )}
+                              [
+                              {tx.fromAccount ||
+                                'Komisi Real TikTok'}
 
-                          </td>
+                              {' → '}
 
-                          {/* DESCRIPTION */}
+                              {tx.toAccount ||
+                                '-'}
 
-                          <td
-                            className="max-w-[260px] truncate px-5 py-3.5 text-zinc-500"
-                            title={
-                              tx.description
-                            }
-                          >
+                              ]
 
-                            {tx.description}
+                            </span>
+                          )}
 
-                            {tx.accountName && (
-                              <span className="ml-1 font-semibold text-emerald-600">
-                                [
-                                {
-                                  tx.accountName
-                                }
-                                ]
-                              </span>
-                            )}
+                        </td>
 
-                            {tx.type ===
-                              'TRANSFER' && (
-                              <span className="ml-1 font-semibold text-indigo-600">
-                                [
-                                {tx.fromAccount ||
-                                  'Komisi Real TikTok'}
-                                {' → '}
-                                {tx.toAccount ||
-                                  '-'}
-                                ]
-                              </span>
-                            )}
+                        <td className="px-5 py-3.5 font-black text-emerald-600">
 
-                          </td>
+                          {incomeAmount >
+                          0
+                            ? formatRupiah(
+                                incomeAmount
+                              )
+                            : '-'}
 
-                          {/* UANG MASUK */}
+                        </td>
 
-                          <td className="px-5 py-3.5 font-black text-emerald-600">
+                        <td className="px-5 py-3.5 font-black text-rose-600">
 
-                            {incomeAmount >
-                            0
-                              ? formatRupiah(
-                                  incomeAmount
-                                )
-                              : '-'}
+                          {expenseAmount >
+                          0
+                            ? formatRupiah(
+                                expenseAmount
+                              )
+                            : '-'}
 
-                          </td>
+                        </td>
 
-                          {/* UANG KELUAR */}
+                        <td className="px-5 py-3.5 text-center">
 
-                          <td className="px-5 py-3.5 font-black text-rose-600">
+                          <div className="flex items-center justify-center gap-2">
 
-                            {expenseAmount >
-                            0
-                              ? formatRupiah(
-                                  expenseAmount
-                                )
-                              : '-'}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTxDetail(
+                                  tx
+                                );
 
-                          </td>
+                                setShowDetailModal(
+                                  true
+                                );
+                              }}
+                              className="rounded-lg p-1.5 text-indigo-600 transition-colors hover:bg-indigo-50"
+                              title="Lihat Detail"
+                            >
 
-                          {/* ACTION */}
+                              <FileText className="h-4 w-4" />
 
-                          <td className="px-5 py-3.5 text-center">
+                            </button>
 
-                            <div className="flex items-center justify-center gap-2">
-
-                              {/* DETAIL */}
-
+                            {role ===
+                              'OWNER' && (
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setSelectedTxDetail(
+                                onClick={() =>
+                                  handleDeleteClick(
                                     tx
-                                  );
-
-                                  setShowDetailModal(
-                                    true
-                                  );
-                                }}
-                                className="rounded-lg p-1.5 text-indigo-600 transition-colors hover:bg-indigo-50"
-                                title="Lihat Detail"
+                                  )
+                                }
+                                className="rounded-lg p-1.5 text-rose-600 transition-colors hover:bg-rose-50"
+                                title="Hapus Transaksi"
                               >
-                                <FileText className="h-4 w-4" />
+
+                                <Trash2 className="h-4 w-4" />
+
                               </button>
+                            )}
 
-                              {/* DELETE */}
+                          </div>
 
-                              {role ===
-                                'OWNER' && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleDeleteClick(
-                                      tx
-                                    )
-                                  }
-                                  className="rounded-lg p-1.5 text-rose-600 transition-colors hover:bg-rose-50"
-                                  title="Hapus Transaksi"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              )}
+                        </td>
 
-                            </div>
-
-                          </td>
-
-                        </tr>
-                      );
-                    }
-                  )
+                      </tr>
+                    );
+                  })
                 )}
 
               </tbody>
+
             </table>
+
           </div>
+
         </div>
+
       </div>
     );
   };
 
-  /* ============================================================
-     PAGE
-  ============================================================ */
+  /*
+   * ============================================================
+   * PAGE
+   * ============================================================
+   */
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
 
-      {/* SEARCH + PERIOD */}
+      {/* ========================================================
+          DASHBOARD SALDO BANK
+      ======================================================== */}
+
+      <div className="rounded-3xl border border-zinc-200 bg-zinc-900 p-6 text-white shadow-xl">
+
+        <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+
+          <div>
+
+            <div className="mb-2 flex items-center gap-2">
+
+              <Landmark className="h-5 w-5 text-emerald-400" />
+
+              <span className="text-xs font-black uppercase tracking-wider text-zinc-400">
+                KAS & BANK
+              </span>
+
+            </div>
+
+            <p className="text-sm font-bold text-zinc-400">
+              Total Saldo Rekening
+            </p>
+
+            <p className="mt-1 text-3xl font-black tracking-tight md:text-4xl">
+
+              {formatRupiah(
+                totalBankBalance
+              )}
+
+            </p>
+
+            <p className="mt-2 text-xs text-zinc-500">
+              Saldo dihitung dari seluruh transaksi
+              bank yang tercatat sampai periode yang dipilih.
+            </p>
+
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 md:w-[420px]">
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+
+              <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase text-emerald-400">
+
+                <Plus className="h-3.5 w-3.5" />
+
+                Total Masuk
+
+              </div>
+
+              <p className="text-lg font-black">
+
+                {formatRupiah(
+                  totalBankIncome
+                )}
+
+              </p>
+
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+
+              <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase text-rose-400">
+
+                <Minus className="h-3.5 w-3.5" />
+
+                Total Keluar
+
+              </div>
+
+              <p className="text-lg font-black">
+
+                {formatRupiah(
+                  totalBankExpense
+                )}
+
+              </p>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* ========================================================
+          SEARCH + PERIOD
+      ======================================================== */}
 
       <div className="flex flex-col items-start justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center">
 
@@ -665,9 +830,77 @@ export const ArusKasPage: React.FC = () => {
           />
 
         </div>
+
       </div>
 
-      {/* SHARING */}
+      {/* ========================================================
+          MONTHLY SUMMARY
+      ======================================================== */}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+
+        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+
+          <p className="text-[11px] font-bold uppercase text-zinc-500">
+            Uang Masuk {formatBulanTahun(selectedMonth)}
+          </p>
+
+          <p className="mt-1 text-2xl font-black text-emerald-700">
+
+            {formatRupiah(
+              monthlyIncome
+            )}
+
+          </p>
+
+        </div>
+
+        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+
+          <p className="text-[11px] font-bold uppercase text-zinc-500">
+            Uang Keluar {formatBulanTahun(selectedMonth)}
+          </p>
+
+          <p className="mt-1 text-2xl font-black text-rose-700">
+
+            {formatRupiah(
+              monthlyExpense
+            )}
+
+          </p>
+
+        </div>
+
+        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+
+          <p className="text-[11px] font-bold uppercase text-zinc-500">
+            Net Cashflow {formatBulanTahun(selectedMonth)}
+          </p>
+
+          <p
+            className={`mt-1 text-2xl font-black ${
+              monthlyIncome -
+                monthlyExpense >=
+              0
+                ? 'text-indigo-700'
+                : 'text-rose-700'
+            }`}
+          >
+
+            {formatRupiah(
+              monthlyIncome -
+                monthlyExpense
+            )}
+
+          </p>
+
+        </div>
+
+      </div>
+
+      {/* ========================================================
+          SHARING
+      ======================================================== */}
 
       {renderSection(
         'SHARING',
@@ -676,10 +909,11 @@ export const ArusKasPage: React.FC = () => {
         'text-indigo-900'
       )}
 
-      {/* PRIBADI */}
+      {/* ========================================================
+          PRIBADI
+      ======================================================== */}
 
-      {role ===
-        'OWNER' &&
+      {role === 'OWNER' &&
         renderSection(
           'PRIBADI',
           'ARUS KAS PRIBADI',
@@ -689,15 +923,14 @@ export const ArusKasPage: React.FC = () => {
 
       {/* INVESTOR */}
 
-      {role ===
-        'INVESTOR' && (
+      {role === 'INVESTOR' && (
         <div className="rounded-xl border border-zinc-200 bg-zinc-100 p-6 text-center">
 
           <Lock className="mx-auto mb-2 h-8 w-8 text-zinc-400" />
 
           <p className="text-xs font-bold text-zinc-500">
-            Arus Kas Pribadi tidak
-            ditampilkan untuk Investor.
+            Arus Kas Pribadi tidak ditampilkan
+            untuk Investor.
           </p>
 
         </div>
@@ -714,18 +947,21 @@ export const ArusKasPage: React.FC = () => {
             <div className="w-full max-w-md rounded-3xl border border-zinc-200 bg-white p-6 text-zinc-800 shadow-2xl">
 
               <h3 className="mb-4 flex items-center gap-2 text-base font-black text-rose-700">
+
                 <Trash2 className="h-5 w-5" />
+
                 Hapus Transaksi Permanen
+
               </h3>
 
               <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
 
                 <p className="mb-2 text-xs font-bold text-rose-800">
-                  Peringatan: Data akan
-                  dihapus secara permanen
-                  dari kas operasional.
-                  Audit log akan mencatat
-                  aksi ini.
+
+                  Peringatan: Data akan dihapus
+                  secara permanen dari kas operasional.
+                  Audit log akan mencatat aksi ini.
+
                 </p>
 
                 <div className="rounded-lg border border-rose-100 bg-white p-2 text-[11px]">
@@ -733,9 +969,8 @@ export const ArusKasPage: React.FC = () => {
                   <strong>
                     Tx ID:
                   </strong>{' '}
-                  {
-                    selectedTxForDelete.id
-                  }
+
+                  {selectedTxForDelete.id}
 
                   <br />
 
@@ -758,20 +993,21 @@ export const ArusKasPage: React.FC = () => {
                   }
 
                 </div>
+
               </div>
 
               <div>
 
                 <label className="mb-1.5 block text-xs font-bold text-zinc-700">
+
                   Alasan Penghapusan (Wajib)
+
                 </label>
 
                 <textarea
                   rows={3}
                   required
-                  value={
-                    deleteReason
-                  }
+                  value={deleteReason}
                   onChange={(e) =>
                     setDeleteReason(
                       e.target.value
@@ -816,6 +1052,7 @@ export const ArusKasPage: React.FC = () => {
               </div>
 
             </div>
+
           </div>
         )}
 
@@ -851,8 +1088,6 @@ export const ArusKasPage: React.FC = () => {
 
               <div className="space-y-3 text-xs">
 
-                {/* CATEGORY */}
-
                 <div className="flex justify-between rounded-lg border border-zinc-200 bg-zinc-50 p-3">
 
                   <span className="font-bold text-zinc-500">
@@ -866,8 +1101,6 @@ export const ArusKasPage: React.FC = () => {
                   </span>
 
                 </div>
-
-                {/* TRANSFER */}
 
                 {selectedTxDetail.type ===
                   'TRANSFER' && (
@@ -909,6 +1142,7 @@ export const ArusKasPage: React.FC = () => {
                       </span>
 
                       <span className="font-black text-emerald-900">
+
                         {formatRupiah(
                           Number(
                             selectedTxDetail.netAmount ??
@@ -916,13 +1150,12 @@ export const ArusKasPage: React.FC = () => {
                               0
                           )
                         )}
+
                       </span>
 
                     </div>
                   </>
                 )}
-
-                {/* DATE */}
 
                 <div className="flex justify-between rounded-lg border border-zinc-200 bg-zinc-50 p-3">
 
@@ -931,14 +1164,14 @@ export const ArusKasPage: React.FC = () => {
                   </span>
 
                   <span className="font-black text-zinc-900">
+
                     {formatTanggal(
                       selectedTxDetail.date
                     )}
+
                   </span>
 
                 </div>
-
-                {/* NOMINAL */}
 
                 <div className="flex justify-between rounded-lg border border-zinc-200 bg-zinc-50 p-3">
 
@@ -969,7 +1202,7 @@ export const ArusKasPage: React.FC = () => {
                     {formatRupiah(
                       Number(
                         selectedTxDetail.type ===
-                        'TRANSFER'
+                          'TRANSFER'
                           ? selectedTxDetail.netAmount ??
                               selectedTxDetail.amount ??
                               0
@@ -981,8 +1214,6 @@ export const ArusKasPage: React.FC = () => {
                   </span>
 
                 </div>
-
-                {/* ACCOUNT */}
 
                 {selectedTxDetail.accountName && (
                   <div className="flex justify-between rounded-lg border border-zinc-200 bg-zinc-50 p-3">
@@ -1000,8 +1231,6 @@ export const ArusKasPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* DESCRIPTION */}
-
                 {selectedTxDetail.description && (
                   <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
 
@@ -1017,8 +1246,6 @@ export const ArusKasPage: React.FC = () => {
 
                   </div>
                 )}
-
-                {/* META */}
 
                 <div className="mt-4 text-center text-[10px] text-zinc-400">
 
@@ -1039,7 +1266,9 @@ export const ArusKasPage: React.FC = () => {
                 </div>
 
               </div>
+
             </div>
+
           </div>
         )}
 
