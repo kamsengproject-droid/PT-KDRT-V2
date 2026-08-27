@@ -1,18 +1,23 @@
 import {
   collection,
   doc,
-  getDocs,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
   query,
-  where,
   orderBy,
   onSnapshot,
   serverTimestamp,
   addDoc,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+
+import {
+  db,
+  handleFirestoreError,
+  OperationType,
+} from '../firebase';
+
 import {
   MonthlyClosing,
   FinancialAdjustment,
@@ -26,16 +31,102 @@ import {
   InventoryItem,
   DailyTask,
   ContentCalendarItem,
-  ScopeType,
 } from '../types';
+
 import { catatAuditLog } from './auditService';
 
 const CLOSINGS_COLLECTION = 'monthlyClosings';
 const ADJUSTMENTS_COLLECTION = 'financialAdjustments';
 
-/**
- * Subscribe seluruh closing bulanan.
- */
+const isCommissionReal = (transaction: any) => {
+  const source = String(
+    transaction?.sourceType || ''
+  ).toUpperCase();
+
+  return (
+    source === 'COMMISSION_REAL' ||
+    source === 'TIKTOK_COMMISSION' ||
+    source === 'TIKTOK COMMISSION'
+  );
+};
+
+const getFundTransferNet = (
+  transaction: any
+): number => {
+  const explicitNet = Number(
+    transaction?.netAmount
+  );
+
+  if (explicitNet > 0) {
+    return explicitNet;
+  }
+
+  return Math.max(
+    0,
+    Number(transaction?.amount || 0) -
+      Number(transaction?.adminFee || 0)
+  );
+};
+
+const getPeriodRange = (
+  yearOrPeriod: number | string,
+  monthOrScope: number | ReportScopeFilter,
+  maybeScope?: ReportScopeFilter
+) => {
+  let year: number;
+  let month: number;
+  let scope: ReportScopeFilter;
+
+  if (typeof yearOrPeriod === 'string') {
+    const parts = yearOrPeriod.split('-');
+
+    year =
+      parseInt(parts[0], 10) ||
+      new Date().getFullYear();
+
+    month =
+      parseInt(parts[1], 10) ||
+      new Date().getMonth() + 1;
+
+    scope =
+      (monthOrScope as ReportScopeFilter) ||
+      'GABUNGAN';
+  } else {
+    year = yearOrPeriod;
+
+    month =
+      typeof monthOrScope === 'number'
+        ? monthOrScope
+        : 1;
+
+    scope = maybeScope || 'GABUNGAN';
+  }
+
+  const monthStr =
+    month < 10 ? `0${month}` : String(month);
+
+  const period = `${year}-${monthStr}`;
+  const startDate = `${period}-01`;
+
+  const lastDay = new Date(
+    year,
+    month,
+    0
+  ).getDate();
+
+  const endDate =
+    `${period}-${String(lastDay).padStart(2, '0')}`;
+
+  return {
+    year,
+    month,
+    period,
+    startDate,
+    endDate,
+    scope,
+  };
+};
+
 export function subscribeMonthlyClosings(
   callback: (closings: MonthlyClosing[]) => void
 ) {
@@ -64,24 +155,29 @@ export function subscribeMonthlyClosings(
   );
 }
 
-/**
- * Ambil closing untuk periode + scope tertentu.
- */
 export async function getMonthlyClosing(
   period: string,
   scope: ReportScopeFilter
 ): Promise<MonthlyClosing | null> {
-  const closingId = `CLOSING_${period}_${scope}`;
+  const closingId =
+    `CLOSING_${period}_${scope}`;
 
   try {
-    const ref = doc(db, CLOSINGS_COLLECTION, closingId);
-    const snap = await getDoc(ref);
+    const ref = doc(
+      db,
+      CLOSINGS_COLLECTION,
+      closingId
+    );
 
-    if (!snap.exists()) return null;
+    const snapshot = await getDoc(ref);
+
+    if (!snapshot.exists()) {
+      return null;
+    }
 
     return {
-      id: snap.id,
-      ...snap.data(),
+      id: snapshot.id,
+      ...snapshot.data(),
     } as MonthlyClosing;
   } catch (error) {
     handleFirestoreError(
@@ -89,30 +185,11 @@ export async function getMonthlyClosing(
       OperationType.GET,
       CLOSINGS_COLLECTION
     );
+
     return null;
   }
 }
 
-/**
- * Hitung snapshot bulanan.
- *
- * PEMISAHAN KEUANGAN:
- *
- * 1. dailyPerformance
- *    = data performa akun
- *    = GMV / estimasi komisi / komisi real
- *
- * 2. transactions
- *    = Kas & Bank aktual
- *    = uang masuk manual
- *    = uang keluar
- *    = Pindah Dana yang sudah masuk rekening
- *
- * Komisi Real TIDAK dihitung sebagai Uang Masuk.
- *
- * Hanya FUND_TRANSFER yang dianggap uang masuk bank,
- * menggunakan netAmount karena admin TikTok sudah dipotong.
- */
 export async function computeMonthlySnapshot(
   yearOrPeriod: number | string,
   monthOrScope: number | ReportScopeFilter,
@@ -129,45 +206,18 @@ export async function computeMonthlySnapshot(
     | 'updatedAt'
   >
 > {
-  let year: number;
-  let month: number;
-  let scope: ReportScopeFilter;
-
-  if (typeof yearOrPeriod === 'string') {
-    const parts = yearOrPeriod.split('-');
-
-    year = parseInt(parts[0], 10) || new Date().getFullYear();
-    month =
-      parseInt(parts[1], 10) ||
-      new Date().getMonth() + 1;
-
-    scope =
-      (monthOrScope as ReportScopeFilter) ||
-      'GABUNGAN';
-  } else {
-    year = yearOrPeriod;
-    month =
-      typeof monthOrScope === 'number'
-        ? monthOrScope
-        : 1;
-
-    scope = maybeScope || 'GABUNGAN';
-  }
-
-  const monthStr =
-    month < 10 ? `0${month}` : `${month}`;
-
-  const period = `${year}-${monthStr}`;
-  const startDate = `${period}-01`;
-
-  const lastDay = new Date(
+  const {
     year,
     month,
-    0
-  ).getDate();
-
-  const endDate =
-    `${period}-${lastDay < 10 ? `0${lastDay}` : lastDay}`;
+    period,
+    startDate,
+    endDate,
+    scope,
+  } = getPeriodRange(
+    yearOrPeriod,
+    monthOrScope,
+    maybeScope
+  );
 
   /* ============================================================
      1. TRANSACTIONS = KAS & BANK
@@ -185,19 +235,19 @@ export async function computeMonthlySnapshot(
       }) as Transaction
   );
 
-  const filteredTx = allTx.filter((t) => {
-    if (!t.date) return false;
+  const filteredTx = allTx.filter((tx) => {
+    if (!tx.date) return false;
 
     if (
-      t.date < startDate ||
-      t.date > endDate
+      tx.date < startDate ||
+      tx.date > endDate
     ) {
       return false;
     }
 
     if (
       scope !== 'GABUNGAN' &&
-      t.scope !== scope
+      tx.scope !== scope
     ) {
       return false;
     }
@@ -213,64 +263,52 @@ export async function computeMonthlySnapshot(
     number
   > = {};
 
-  filteredTx.forEach((t) => {
+  filteredTx.forEach((tx) => {
     const sourceType =
-      t.sourceType || 'LAINNYA';
+      String(
+        tx.sourceType || 'LAINNYA'
+      ).toUpperCase();
 
     /*
-     * KOMISI REAL BUKAN UANG BANK.
-     *
-     * Data lama mungkin masih memiliki transaksi
-     * sourceType COMMISSION_REAL / TIKTOK_COMMISSION.
-     *
-     * Jangan ikutkan ke Kas & Bank.
+     * KOMISI REAL:
+     * hanya performa TikTok.
+     * TIDAK menjadi Kas & Bank.
      */
-    if (
-      sourceType === 'COMMISSION_REAL' ||
-      sourceType === 'TIKTOK_COMMISSION'
-    ) {
+    if (isCommissionReal(tx)) {
       return;
     }
 
     /*
-     * Pindah Dana:
-     *
-     * Komisi bruto - Admin TikTok = uang benar-benar
-     * diterima rekening bank.
-     *
-     * Hanya dihitung sebagai Uang Masuk Kas & Bank.
+     * PINDAH DANA:
+     * hanya NET AMOUNT yang benar-benar
+     * masuk rekening.
      */
-    if (
-      sourceType === 'FUND_TRANSFER' ||
-      (t.type === 'TRANSFER' &&
-        sourceType === 'FUND_TRANSFER')
-    ) {
+    if (sourceType === 'FUND_TRANSFER') {
       const netAmount =
-        Number(t.netAmount) ||
-        Math.max(
-          0,
-          Number(t.amount) -
-            Number(t.adminFee || 0)
-        );
+        getFundTransferNet(tx);
 
       if (netAmount > 0) {
         uangMasuk += netAmount;
 
-        sourceTypeBreakdown[sourceType] =
-          (sourceTypeBreakdown[sourceType] || 0) +
-          netAmount;
+        sourceTypeBreakdown[
+          'FUND_TRANSFER'
+        ] =
+          (sourceTypeBreakdown[
+            'FUND_TRANSFER'
+          ] || 0) + netAmount;
       }
 
       return;
     }
 
     /*
-     * Uang Masuk biasa.
-     *
-     * MANUAL / sumber income lainnya.
+     * INCOME BIASA:
+     * uang yang memang sudah tercatat
+     * sebagai uang masuk.
      */
-    if (t.type === 'INCOME') {
-      const amount = Number(t.amount) || 0;
+    if (tx.type === 'INCOME') {
+      const amount =
+        Number(tx.amount) || 0;
 
       uangMasuk += amount;
 
@@ -282,14 +320,14 @@ export async function computeMonthlySnapshot(
     }
 
     /*
-     * Semua transaksi EXPENSE mengurangi Kas & Bank.
-     *
-     * Approval payroll sudah ditangani di payrollService.
-     * Hanya transaksi yang benar-benar dibuat sebagai
-     * financial transaction yang masuk ke sini.
+     * EXPENSE:
+     * benar-benar mengurangi Kas & Bank.
      */
-    if (t.type === 'EXPENSE') {
-      uangKeluar += Number(t.amount) || 0;
+    if (tx.type === 'EXPENSE') {
+      uangKeluar +=
+        Number(tx.amount) || 0;
+
+      return;
     }
   });
 
@@ -298,7 +336,6 @@ export async function computeMonthlySnapshot(
 
   /* ============================================================
      2. DAILY PERFORMANCE
-        BUKAN KAS & BANK
      ============================================================ */
 
   const perfSnap = await getDocs(
@@ -337,12 +374,19 @@ export async function computeMonthlySnapshot(
   let estimasiKomisi = 0;
   let komisiReal = 0;
 
-  filteredPerf.forEach((p) => {
-    gmv += Number(p.gmv) || 0;
+  filteredPerf.forEach((performance) => {
+    gmv +=
+      Number(performance.gmv) || 0;
+
     estimasiKomisi +=
-      Number(p.estimatedCommission) || 0;
+      Number(
+        performance.estimatedCommission
+      ) || 0;
+
     komisiReal +=
-      Number(p.realCommission) || 0;
+      Number(
+        performance.realCommission
+      ) || 0;
   });
 
   /* ============================================================
@@ -361,19 +405,19 @@ export async function computeMonthlySnapshot(
       }) as Expense
   );
 
-  const filteredExp = allExp.filter((e) => {
-    if (!e.date) return false;
+  const filteredExp = allExp.filter((expense) => {
+    if (!expense.date) return false;
 
     if (
-      e.date < startDate ||
-      e.date > endDate
+      expense.date < startDate ||
+      expense.date > endDate
     ) {
       return false;
     }
 
     if (
       scope !== 'GABUNGAN' &&
-      e.scope !== scope
+      expense.scope !== scope
     ) {
       return false;
     }
@@ -398,10 +442,12 @@ export async function computeMonthlySnapshot(
     }
   > = {};
 
-  filteredExp.forEach((e) => {
-    const amount = Number(e.amount) || 0;
+  filteredExp.forEach((expense) => {
+    const amount =
+      Number(expense.amount) || 0;
+
     const category =
-      e.category || 'OPERASIONAL';
+      expense.category || 'OPERASIONAL';
 
     totalExpense += amount;
 
@@ -414,8 +460,8 @@ export async function computeMonthlySnapshot(
     }
 
     const name =
-      e.description ||
-      e.category ||
+      expense.description ||
+      category ||
       'Biaya';
 
     if (!expenseMapByName[name]) {
@@ -451,13 +497,13 @@ export async function computeMonthlySnapshot(
       }) as Payroll
   );
 
-  const filteredPay = allPay.filter((p) => {
+  const filteredPay = allPay.filter((payroll) => {
     if (
-      p.month !== period &&
-      p.paymentDate &&
+      payroll.month !== period &&
+      payroll.paymentDate &&
       (
-        p.paymentDate < startDate ||
-        p.paymentDate > endDate
+        payroll.paymentDate < startDate ||
+        payroll.paymentDate > endDate
       )
     ) {
       return false;
@@ -473,25 +519,26 @@ export async function computeMonthlySnapshot(
   let totalPayrollPaid = 0;
   let totalPayrollUnpaid = 0;
 
-  filteredPay.forEach((p) => {
+  filteredPay.forEach((payroll) => {
     const net =
-      Number(p.totalPay) ||
-      Number(p.total) ||
+      Number(payroll.totalPay) ||
+      Number(payroll.total) ||
       0;
 
     totalPayroll += net;
+
     totalGajiPokok +=
-      Number(p.baseSalary) || 0;
+      Number(payroll.baseSalary) || 0;
 
     totalUangRajin +=
-      Number(p.attendanceBonus) || 0;
+      Number(payroll.attendanceBonus) || 0;
 
     totalBonus +=
-      Number(p.bonus) ||
-      Number(p.bonusAmount) ||
+      Number(payroll.bonus) ||
+      Number(payroll.bonusAmount) ||
       0;
 
-    if (p.status === 'PAID') {
+    if (payroll.status === 'PAID') {
       totalPayrollPaid += net;
     } else {
       totalPayrollUnpaid += net;
@@ -519,15 +566,17 @@ export async function computeMonthlySnapshot(
     );
 
   const filteredSettlements =
-    allSettlements.filter((s) => {
+    allSettlements.filter((settlement) => {
       const settlementPeriod =
-        `${s.year}-${String(s.month).padStart(2, '0')}`;
+        `${settlement.year}-${String(
+          settlement.month
+        ).padStart(2, '0')}`;
 
       return (
         settlementPeriod === period ||
         (
-          s.periodStart &&
-          s.periodStart.startsWith(period)
+          settlement.periodStart &&
+          settlement.periodStart.startsWith(period)
         )
       );
     });
@@ -541,30 +590,36 @@ export async function computeMonthlySnapshot(
   let investorPaid = 0;
   let investorUnpaid = 0;
 
-  filteredSettlements.forEach((s) => {
+  filteredSettlements.forEach((settlement) => {
     totalProfitSharingMasuk +=
-      Number(s.totalIncome) || 0;
+      Number(settlement.totalIncome) || 0;
 
     hakInvestor +=
-      Number(s.investorAmount) || 0;
+      Number(settlement.investorAmount) || 0;
 
     hakOwner +=
-      Number(s.ownerAmount) || 0;
+      Number(settlement.ownerAmount) || 0;
 
     hakTalent +=
-      Number(s.talentAmount) || 0;
+      Number(settlement.talentAmount) || 0;
 
     hakEditor +=
-      Number(s.editorAmount) || 0;
+      Number(settlement.editorAmount) || 0;
 
     budgetPerusahaan +=
-      Number(s.companyBudgetAmount) || 0;
+      Number(
+        settlement.companyBudgetAmount
+      ) || 0;
 
     investorPaid +=
-      Number(s.totalPaidToInvestor) || 0;
+      Number(
+        settlement.totalPaidToInvestor
+      ) || 0;
 
     investorUnpaid +=
-      Number(s.remainingInvestorObligation) || 0;
+      Number(
+        settlement.remainingInvestorObligation
+      ) || 0;
   });
 
   /* ============================================================
@@ -604,11 +659,11 @@ export async function computeMonthlySnapshot(
   let totalContentPosted = 0;
 
   try {
-    const contSnap = await getDocs(
+    const contentSnap = await getDocs(
       collection(db, 'contentCalendar')
     );
 
-    const allCont = contSnap.docs.map(
+    const content = contentSnap.docs.map(
       (d) =>
         ({
           id: d.id,
@@ -616,32 +671,35 @@ export async function computeMonthlySnapshot(
         }) as ContentCalendarItem
     );
 
-    const filteredCont = allCont.filter((c) => {
-      if (!c.date) return false;
+    const filteredContent = content.filter(
+      (item) => {
+        if (!item.date) return false;
 
-      if (
-        c.date < startDate ||
-        c.date > endDate
-      ) {
-        return false;
+        if (
+          item.date < startDate ||
+          item.date > endDate
+        ) {
+          return false;
+        }
+
+        if (
+          scope !== 'GABUNGAN' &&
+          item.scope !== scope
+        ) {
+          return false;
+        }
+
+        return true;
       }
-
-      if (
-        scope !== 'GABUNGAN' &&
-        c.scope !== scope
-      ) {
-        return false;
-      }
-
-      return true;
-    });
+    );
 
     totalContentPlanned =
-      filteredCont.length;
+      filteredContent.length;
 
     totalContentPosted =
-      filteredCont.filter(
-        (c) => c.status === 'DIPOSTING'
+      filteredContent.filter(
+        (item) =>
+          item.status === 'DIPOSTING'
       ).length;
   } catch (error) {
     console.warn(
@@ -661,7 +719,7 @@ export async function computeMonthlySnapshot(
       collection(db, 'dailyTasks')
     );
 
-    const allTasks = taskSnap.docs.map(
+    const tasks = taskSnap.docs.map(
       (d) =>
         ({
           id: d.id,
@@ -669,18 +727,19 @@ export async function computeMonthlySnapshot(
         }) as DailyTask
     );
 
-    const filteredTasks = allTasks.filter((t) => {
-      if (!t.tanggal) return false;
+    const filteredTasks = tasks.filter((task) => {
+      if (!task.tanggal) return false;
 
       return (
-        t.tanggal >= startDate &&
-        t.tanggal <= endDate
+        task.tanggal >= startDate &&
+        task.tanggal <= endDate
       );
     });
 
     totalTasksCompleted =
       filteredTasks.filter(
-        (t) => t.status === 'SELESAI'
+        (task) =>
+          task.status === 'SELESAI'
       ).length;
   } catch (error) {
     console.warn(
@@ -698,27 +757,36 @@ export async function computeMonthlySnapshot(
     undefined;
 
   try {
-    const recSnap = await getDocs(
-      collection(
-        db,
-        'cashReconciliations'
-      )
-    );
-
-    if (!recSnap.empty) {
-      const recs = recSnap.docs.map(
-        (d) => d.data()
+    const reconciliationSnap =
+      await getDocs(
+        collection(
+          db,
+          'cashReconciliations'
+        )
       );
 
-      const monthRecs = recs.filter(
-        (r: any) =>
-          r.reconcileDate &&
-          r.reconcileDate.startsWith(period)
+    if (!reconciliationSnap.empty) {
+      const records =
+        reconciliationSnap.docs.map(
+          (d) => d.data()
+        );
+
+      const monthRecords = records.filter(
+        (record: any) =>
+          record.reconcileDate &&
+          record.reconcileDate.startsWith(
+            period
+          )
       );
 
-      if (monthRecs.length > 0) {
+      if (monthRecords.length > 0) {
         const latest =
-          monthRecs[monthRecs.length - 1] as any;
+          monthRecords[
+            monthRecords.length - 1
+          ] as any;
+
+        const difference =
+          Number(latest.selisih) || 0;
 
         reconciliationSnapshot = {
           saldoBuku:
@@ -729,15 +797,14 @@ export async function computeMonthlySnapshot(
             Number(latest.saldoAktual) ||
             saldoBersih,
 
-          selisih:
-            Number(latest.selisih) || 0,
+          selisih: difference,
 
           status:
             latest.status ||
             (
-              Number(latest.selisih) === 0
+              difference === 0
                 ? 'SEIMBANG'
-                : Number(latest.selisih) > 0
+                : difference > 0
                   ? 'SURPLUS FISIK'
                   : 'DEFISIT FISIK'
             ),
@@ -768,10 +835,6 @@ export async function computeMonthlySnapshot(
     };
   }
 
-  /* ============================================================
-     RETURN SNAPSHOT
-     ============================================================ */
-
   return {
     closingId:
       `CLOSING_${period}_${scope}`,
@@ -781,34 +844,19 @@ export async function computeMonthlySnapshot(
     period,
     scope,
 
-    /*
-     * KAS & BANK
-     */
     uangMasuk,
     uangKeluar,
     saldoBersih,
 
-    /*
-     * PERFORMA AKUN
-     */
     gmv,
     estimasiKomisi,
     komisiReal,
 
-    /*
-     * EXPENSE
-     */
     totalExpense,
     totalSampleExpense,
 
-    /*
-     * ASSET
-     */
     totalInventoryValue,
 
-    /*
-     * PAYROLL
-     */
     totalPayroll,
     totalGajiPokok,
     totalUangRajin,
@@ -816,9 +864,6 @@ export async function computeMonthlySnapshot(
     totalPayrollPaid,
     totalPayrollUnpaid,
 
-    /*
-     * PROFIT SHARING
-     */
     totalProfitSharingMasuk,
     hakInvestor,
     hakOwner,
@@ -828,30 +873,18 @@ export async function computeMonthlySnapshot(
     investorPaid,
     investorUnpaid,
 
-    /*
-     * CONTENT / TASK
-     */
     totalContentPlanned,
     totalContentPosted,
     totalTasksCompleted,
 
-    /*
-     * BREAKDOWN
-     */
     sourceTypeBreakdown,
     expenseCategoryBreakdown,
     topExpenses,
 
-    /*
-     * REKONSILIASI
-     */
     reconciliationSnapshot,
   };
 }
 
-/**
- * Tutup bulan.
- */
 export async function closeMonth(
   yearOrPeriod: number | string,
   monthOrScope: number | ReportScopeFilter,
@@ -913,7 +946,7 @@ export async function closeMonth(
   }
 
   const monthStr =
-    month < 10 ? `0${month}` : `${month}`;
+    month < 10 ? `0${month}` : String(month);
 
   const period =
     `${year}-${monthStr}`;
@@ -921,7 +954,7 @@ export async function closeMonth(
   const closingId =
     `CLOSING_${period}_${scope}`;
 
-  const computedSnapshot =
+  const snapshot =
     await computeMonthlySnapshot(
       year,
       month,
@@ -929,32 +962,25 @@ export async function closeMonth(
     );
 
   const closingData: MonthlyClosing = {
-    ...computedSnapshot,
+    ...snapshot,
 
     status: 'CLOSED',
-
     notes: notes || '',
 
     closedAt: serverTimestamp(),
-
-    closedBy:
-      userProfile.uid,
-
-    closedByName:
-      userProfile.name,
+    closedBy: userProfile.uid,
+    closedByName: userProfile.name,
 
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
 
-  const ref = doc(
-    db,
-    CLOSINGS_COLLECTION,
-    closingId
-  );
-
   await setDoc(
-    ref,
+    doc(
+      db,
+      CLOSINGS_COLLECTION,
+      closingId
+    ),
     closingData,
     { merge: true }
   );
@@ -965,19 +991,16 @@ export async function closeMonth(
     'MONTH_CLOSED',
     `monthlyClosing/${closingId}`,
     `Penutupan Buku Bulan ${period} (${scope}). ` +
-      `Saldo Kas & Bank: ${computedSnapshot.saldoBersih}, ` +
-      `Uang Masuk: ${computedSnapshot.uangMasuk}, ` +
-      `Uang Keluar: ${computedSnapshot.uangKeluar}, ` +
-      `Komisi Real: ${computedSnapshot.komisiReal} ` +
-      `(tidak dihitung sebagai saldo bank)`
+      `Saldo Kas & Bank: ${snapshot.saldoBersih}. ` +
+      `Uang Masuk: ${snapshot.uangMasuk}. ` +
+      `Uang Keluar: ${snapshot.uangKeluar}. ` +
+      `Komisi Real: ${snapshot.komisiReal} ` +
+      `(tidak dihitung sebagai saldo bank).`
   );
 
   return closingData;
 }
 
-/**
- * Buka kembali bulan.
- */
 export async function reopenMonth(
   closingId: string,
   reason: string,
@@ -989,20 +1012,21 @@ export async function reopenMonth(
     );
   }
 
-  const ref = doc(
-    db,
-    CLOSINGS_COLLECTION,
-    closingId
+  await updateDoc(
+    doc(
+      db,
+      CLOSINGS_COLLECTION,
+      closingId
+    ),
+    {
+      status: 'OPEN',
+      reopenedAt: serverTimestamp(),
+      reopenedBy: userProfile.uid,
+      reopenedByName: userProfile.name,
+      reopenReason: reason.trim(),
+      updatedAt: serverTimestamp(),
+    }
   );
-
-  await updateDoc(ref, {
-    status: 'OPEN',
-    reopenedAt: serverTimestamp(),
-    reopenedBy: userProfile.uid,
-    reopenedByName: userProfile.name,
-    reopenReason: reason.trim(),
-    updatedAt: serverTimestamp(),
-  });
 
   await catatAuditLog(
     userProfile.uid,
@@ -1014,9 +1038,6 @@ export async function reopenMonth(
   );
 }
 
-/**
- * Financial adjustment untuk periode yang sudah ditutup.
- */
 export async function createFinancialAdjustment(
   adjustment: Omit<
     FinancialAdjustment,
@@ -1034,10 +1055,10 @@ export async function createFinancialAdjustment(
     );
   }
 
-  if (
-    !adjustment.amount ||
-    adjustment.amount <= 0
-  ) {
+  const amount =
+    Number(adjustment.amount) || 0;
+
+  if (amount <= 0) {
     throw new Error(
       'Nominal adjustment harus lebih dari 0.'
     );
@@ -1046,14 +1067,14 @@ export async function createFinancialAdjustment(
   const adjustmentId =
     `ADJ_${Date.now()}`;
 
-  const newAdjustment:
-    FinancialAdjustment = {
-      ...adjustment,
-      adjustmentId,
-      approvedBy: userProfile.uid,
-      approvedByName: userProfile.name,
-      createdAt: serverTimestamp(),
-    };
+  const adjustmentData: FinancialAdjustment = {
+    ...adjustment,
+    amount,
+    adjustmentId,
+    approvedBy: userProfile.uid,
+    approvedByName: userProfile.name,
+    createdAt: serverTimestamp(),
+  };
 
   const adjustmentRef =
     await addDoc(
@@ -1061,37 +1082,29 @@ export async function createFinancialAdjustment(
         db,
         ADJUSTMENTS_COLLECTION
       ),
-      newAdjustment
+      adjustmentData
     );
 
-  /*
-   * Adjustment memang mempengaruhi Kas & Bank.
-   *
-   * Berbeda dengan Komisi Real:
-   * adjustment adalah koreksi accounting
-   * yang memang sengaja dimasukkan Owner.
-   */
+  const transactionType =
+    adjustment.type ===
+    'INCOME_ADJUSTMENT'
+      ? 'INCOME'
+      : 'EXPENSE';
+
   await addDoc(
     collection(db, 'transactions'),
     {
       transactionId:
         `TX_${adjustmentId}`,
 
-      date:
-        adjustment.period
-          ? `${adjustment.period}-01`
-          : new Date()
-              .toISOString()
-              .slice(0, 10),
+      date: adjustment.period
+        ? `${adjustment.period}-01`
+        : new Date()
+            .toISOString()
+            .slice(0, 10),
 
-      type:
-        adjustment.type ===
-        'INCOME_ADJUSTMENT'
-          ? 'INCOME'
-          : 'EXPENSE',
-
-      scope:
-        adjustment.scope,
+      type: transactionType,
+      scope: adjustment.scope,
 
       category:
         adjustment.category ||
@@ -1101,25 +1114,19 @@ export async function createFinancialAdjustment(
         adjustment.sourceType ||
         'FINANCIAL_ADJUSTMENT',
 
-      amount:
-        Number(adjustment.amount),
+      amount,
 
       description:
         `[ADJUSTMENT ${adjustment.period}] ` +
         `${adjustment.description}: ` +
         `${adjustment.reason}`,
 
-      createdBy:
-        userProfile.uid,
+      createdBy: userProfile.uid,
+      createdByName: userProfile.name,
 
-      createdByName:
-        userProfile.name,
-
-      createdAt:
-        serverTimestamp(),
+      createdAt: serverTimestamp(),
 
       isAdjustment: true,
-
       adjustmentPeriod:
         adjustment.period,
     }
@@ -1130,10 +1137,8 @@ export async function createFinancialAdjustment(
     userProfile.name,
     'FINANCIAL_ADJUSTMENT_CREATED',
     `financialAdjustment/${adjustmentRef.id}`,
-    `Adjustment Keuangan ${adjustment.type} ` +
-      `Rp ${Number(
-        adjustment.amount
-      ).toLocaleString('id-ID')} ` +
+    `Adjustment ${adjustment.type} ` +
+      `Rp ${amount.toLocaleString('id-ID')} ` +
       `untuk periode ${adjustment.period} ` +
       `(${adjustment.scope}). ` +
       `Alasan: ${adjustment.reason}`
@@ -1142,12 +1147,9 @@ export async function createFinancialAdjustment(
   return adjustmentRef.id;
 }
 
-/**
- * Cek apakah tanggal berada dalam periode yang sudah ditutup.
- */
 export async function checkIsDateClosed(
   dateStr: string,
-  scope: ScopeType
+  scope: any
 ): Promise<{
   isClosed: boolean;
   closingInfo?: MonthlyClosing;
@@ -1172,28 +1174,24 @@ export async function checkIsDateClosed(
       };
     }
 
-    const gabunganClosing =
+    const gabungan =
       await getMonthlyClosing(
         period,
         'GABUNGAN'
       );
 
     if (
-      gabunganClosing &&
-      gabunganClosing.status === 'CLOSED'
+      gabungan &&
+      gabungan.status === 'CLOSED'
     ) {
       return {
         isClosed: true,
-        closingInfo: gabunganClosing,
+        closingInfo: gabungan,
       };
     }
 
-    return {
-      isClosed: false,
-    };
+    return { isClosed: false };
   } catch {
-    return {
-      isClosed: false,
-    };
+    return { isClosed: false };
   }
 }
