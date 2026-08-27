@@ -338,51 +338,8 @@ export async function recordFundTransfer(
   );
 }
 
-// 5. Catat Uang Masuk Khusus TikTok (GMV & Estimasi Komisi adalah metrik, Komisi Real adalah UANG MASUK)
-export async function recordTikTokIncome(
-  data: {
-    date: string;
-    accountId: string;
-    accountName: string;
-    scope: ScopeType;
-    gmv: number;
-    estimatedCommission: number;
-    realCommission: number;
-    notes?: string;
-  },
-  currentUserId: string,
-  currentUserName: string
-): Promise<{ success: boolean; id?: string; message: string }> {
-  const realComm = Number(data.realCommission) || 0;
-  const refId = `tiktok_${data.accountId}_${data.date}`;
 
-  // 1. Simpan Transaksi Uang Masuk ke transactions
-  const txResult = await createFinancialTransaction(
-    {
-      type: 'INCOME',
-      amount: realComm, // HANYA KOMISI REAL YANG MASUK KAS
-      date: data.date,
-      category: 'KOMISI TIKTOK',
-      scope: data.scope,
-      sourceType: 'TIKTOK_COMMISSION',
-      referenceId: refId,
-      accountId: data.accountId,
-      accountName: data.accountName,
-      gmv: Number(data.gmv) || 0,
-      estimatedCommission: Number(data.estimatedCommission) || 0,
-      realCommission: realComm,
-      paymentMethod: 'TRANSFER',
-      description: `Komisi Real TikTok: ${data.accountName} (${data.date})`,
-      notes: data.notes || `GMV: Rp ${Number(data.gmv).toLocaleString('id-ID')}, Estimasi Komisi: Rp ${Number(data.estimatedCommission).toLocaleString('id-ID')}`,
-      createdBy: currentUserId,
-      createdByName: currentUserName,
-    },
-    currentUserId,
-    currentUserName
-  );
 
-  return txResult;
-}
 
 // 6. VOID Transaksi (Koreksi Transaksi Tanpa Menghapus Permanen)
 export async function deleteTransaction(
