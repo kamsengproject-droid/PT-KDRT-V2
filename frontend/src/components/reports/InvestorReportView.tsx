@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   Landmark,
 } from 'lucide-react';
+
 import {
   Transaction,
   Expense,
@@ -15,6 +16,7 @@ import {
   UserProfile,
   ReportScopeFilter,
 } from '../../types';
+
 import { formatRupiah } from '../../utils/formatters';
 import { exportReportData } from '../../services/exportService';
 
@@ -27,24 +29,47 @@ interface InvestorReportViewProps {
   dateRange: string;
 }
 
-const isKomisiReal = (tx: Transaction) => {
-  const sourceType = String(
-    tx.sourceType || ''
+const normalizeSourceType = (
+  transaction: Transaction
+) =>
+  String(
+    transaction.sourceType || ''
   ).toUpperCase();
 
+const isKomisiReal = (
+  transaction: Transaction
+) => {
+  const source =
+    normalizeSourceType(transaction);
+
   return (
-    sourceType === 'COMMISSION_REAL' ||
-    sourceType === 'TIKTOK_COMMISSION' ||
-    sourceType === 'TIKTOK COMMISSION'
+    source === 'COMMISSION_REAL' ||
+    source === 'TIKTOK_COMMISSION' ||
+    source === 'TIKTOK COMMISSION'
   );
 };
 
-const isFundTransfer = (tx: Transaction) => {
-  const sourceType = String(
-    tx.sourceType || ''
-  ).toUpperCase();
+const isFundTransfer = (
+  transaction: Transaction
+) =>
+  normalizeSourceType(transaction) ===
+  'FUND_TRANSFER';
 
-  return sourceType === 'FUND_TRANSFER';
+const getFundTransferNet = (
+  transaction: Transaction
+) => {
+  const net =
+    Number(transaction.netAmount);
+
+  if (net > 0) {
+    return net;
+  }
+
+  return Math.max(
+    0,
+    Number(transaction.amount || 0) -
+      Number(transaction.adminFee || 0)
+  );
 };
 
 export const InvestorReportView: React.FC<
@@ -61,48 +86,39 @@ export const InvestorReportView: React.FC<
    * ============================================================
    * INVESTOR REPORT = SHARING ONLY
    *
-   * PEMISAHAN:
-   *
    * KOMISI REAL
-   * -> performa akun TikTok
-   * -> belum menjadi uang bank
+   * -> performa akun
+   * -> bukan uang bank
    *
    * PINDAH DANA
-   * -> uang benar-benar masuk rekening
-   * -> yang dihitung adalah NET AMOUNT
+   * -> uang benar-benar masuk bank
+   * -> gunakan NET AMOUNT
    *
    * EXPENSE
    * -> uang benar-benar keluar
-   * -> hanya transaction yang menjadi sumber Kas & Bank
-   *
-   * Jadi laporan Investor tidak lagi menganggap Komisi Real
-   * sebagai uang masuk bank.
    * ============================================================
    */
 
-  const sharingTx = transactions.filter(
-    (tx) =>
-      tx.scope === 'SHARING' &&
-      !isKomisiReal(tx)
-  );
+  const sharingTransactions =
+    transactions.filter(
+      (transaction) =>
+        transaction.scope === 'SHARING'
+    );
 
-  const sharingExp = expenses.filter(
-    (expense) =>
-      expense.scope === 'SHARING'
-  );
+  const sharingCashTransactions =
+    sharingTransactions.filter(
+      (transaction) =>
+        !isKomisiReal(transaction)
+    );
+
+  const sharingExpenses =
+    expenses.filter(
+      (expense) =>
+        expense.scope === 'SHARING'
+    );
 
   const sharingSettlements =
-    settlements.filter((settlement) => {
-      /*
-       * Settlement secara bisnis adalah SHARING pool.
-       * Tidak perlu memaksa field scope pada settlement.
-       */
-      return true;
-    });
-
-  /* ============================================================
-     KAS & BANK SHARING
-     ============================================================ */
+    settlements;
 
   let uangMasukSharing = 0;
   let uangKeluarSharing = 0;
@@ -112,108 +128,69 @@ export const InvestorReportView: React.FC<
 
   let totalKomisiRealExcluded = 0;
 
-  sharingTx.forEach((tx) => {
-    const amount =
-      Number(tx.amount) || 0;
+  sharingCashTransactions.forEach(
+    (transaction) => {
+      if (
+        isFundTransfer(transaction) &&
+        transaction.type === 'INCOME'
+      ) {
+        const net =
+          getFundTransferNet(transaction);
 
-    /*
-     * Pindah Dana:
-     *
-     * bruto komisi
-     * - admin TikTok
-     * = uang aktual masuk bank
-     */
-    if (
-      isFundTransfer(tx) &&
-      tx.type === 'INCOME'
-    ) {
-      const netAmount =
-        Number(
-          tx.netAmount
-        ) ||
-        Math.max(
-          0,
-          amount -
-            Number(
-              tx.adminFee || 0
-            )
-        );
+        if (net > 0) {
+          uangMasukSharing += net;
+          jumlahUangMasuk++;
+        }
 
-      if (netAmount > 0) {
-        uangMasukSharing +=
-          netAmount;
-
-        jumlahUangMasuk += 1;
+        return;
       }
 
-      return;
+      if (
+        transaction.type === 'INCOME'
+      ) {
+        uangMasukSharing +=
+          Number(transaction.amount) || 0;
+
+        jumlahUangMasuk++;
+        return;
+      }
+
+      if (
+        transaction.type === 'EXPENSE'
+      ) {
+        uangKeluarSharing +=
+          Number(transaction.amount) || 0;
+
+        jumlahUangKeluar++;
+      }
     }
+  );
 
-    /*
-     * Uang masuk manual / income lainnya.
-     */
-    if (tx.type === 'INCOME') {
-      uangMasukSharing +=
-        amount;
-
-      jumlahUangMasuk += 1;
-
-      return;
-    }
-
-    /*
-     * Uang keluar.
-     */
-    if (tx.type === 'EXPENSE') {
-      uangKeluarSharing +=
-        amount;
-
-      jumlahUangKeluar += 1;
-    }
-  });
-
-  /*
-   * Untuk berjaga-jaga jika data lama Komisi Real masih berada
-   * di transactions, jangan pernah masukkan ke Kas & Bank.
-   */
-  transactions
-    .filter(
-      (tx) =>
-        tx.scope === 'SHARING' &&
-        isKomisiReal(tx)
-    )
-    .forEach((tx) => {
+  sharingTransactions
+    .filter(isKomisiReal)
+    .forEach((transaction) => {
       totalKomisiRealExcluded +=
-        Number(tx.amount) || 0;
+        Number(transaction.amount) || 0;
     });
 
   const saldoSharing =
     uangMasukSharing -
     uangKeluarSharing;
 
-  /* ============================================================
-     EXPENSE DETAIL
-     ============================================================ */
-
+  /*
+   * Detail expenses hanya untuk laporan.
+   *
+   * Tidak dikurangkan lagi ke saldo karena
+   * transaction EXPENSE sudah melakukan
+   * pengurangan Kas & Bank.
+   */
   const totalExpenseSharing =
-    sharingExp.reduce(
+    sharingExpenses.reduce(
       (total, expense) =>
         total +
         (Number(expense.amount) || 0),
       0
     );
-
-  /*
-   * Jangan gunakan totalExpenseSharing sebagai pengurang
-   * Kas & Bank lagi karena expense tersebut sudah tercermin
-   * di transactions.
-   *
-   * Ini mencegah double counting.
-   */
-
-  /* ============================================================
-     INVESTOR SETTLEMENT
-     ============================================================ */
 
   let totalHakInvestor = 0;
   let totalSudahDibayar = 0;
@@ -221,32 +198,23 @@ export const InvestorReportView: React.FC<
 
   sharingSettlements.forEach(
     (settlement) => {
-      const bagianInvestor =
+      const hak =
         Number(
           settlement.bagianInvestor
         ) || 0;
 
-      totalHakInvestor +=
-        bagianInvestor;
+      totalHakInvestor += hak;
 
       if (
         settlement.statusPembayaran ===
         'PAID'
       ) {
-        totalSudahDibayar +=
-          bagianInvestor;
+        totalSudahDibayar += hak;
       } else {
-        totalBelumDibayar +=
-          bagianInvestor;
+        totalBelumDibayar += hak;
       }
     }
   );
-
-  /*
-   * ============================================================
-   * CASHFLOW STATUS
-   * ============================================================
-   */
 
   const cashCoverage =
     totalHakInvestor > 0
@@ -257,55 +225,56 @@ export const InvestorReportView: React.FC<
         )
       : 0;
 
-  /*
-   * ============================================================
-   * EXPORT
-   * ============================================================
-   */
-
   const handleExport = (
     format: 'CSV' | 'XLSX'
   ) => {
     const exportData =
       sharingSettlements.map(
-        (settlement) => ({
-          Periode:
-            settlement.period,
+        (settlement) => {
+          const hak =
+            Number(
+              settlement.bagianInvestor
+            ) || 0;
 
-          Tier:
-            settlement.tierName ||
-            `Tier ${settlement.tier}`,
-
-          'Kas & Bank Masuk Sharing':
-            settlement.totalUangMasuk ||
-            0,
-
-          'Hak Investor':
-            settlement.bagianInvestor ||
-            0,
-
-          'Sudah Dibayar':
+          const paid =
             settlement.statusPembayaran ===
             'PAID'
-              ? settlement.bagianInvestor ||
-                0
-              : 0,
+              ? hak
+              : 0;
 
-          'Belum Dibayar':
-            settlement.statusPembayaran !==
-            'PAID'
-              ? settlement.bagianInvestor ||
-                0
-              : 0,
+          const remaining =
+            Math.max(
+              0,
+              hak - paid
+            );
 
-          'Status Pembayaran':
-            settlement.statusPembayaran,
+          return {
+            Periode:
+              settlement.period,
 
-          'Tanggal Cair':
-            settlement.settledDate ||
-            settlement.paidDate ||
-            '-',
-        })
+            Tier:
+              settlement.tierName ||
+              `Tier ${settlement.tier}`,
+
+            'Kas & Bank Masuk Sharing':
+              settlement.totalUangMasuk ||
+              0,
+
+            'Hak Investor': hak,
+
+            'Sudah Dibayar': paid,
+
+            'Belum Dibayar': remaining,
+
+            'Status Pembayaran':
+              settlement.statusPembayaran,
+
+            'Tanggal Cair':
+              settlement.settledDate ||
+              settlement.paidDate ||
+              '-',
+          };
+        }
       );
 
     exportReportData({
@@ -333,81 +302,55 @@ export const InvestorReportView: React.FC<
 
   return (
     <div className="space-y-6">
-
-      {/* ======================================================
-          HEADER
-          ====================================================== */}
-
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-purple-200 shadow-2xs">
-
+      <div className="flex flex-col justify-between gap-3 rounded-2xl border border-purple-200 bg-white p-4 shadow-2xs sm:flex-row sm:items-center">
         <div>
-          <h2 className="text-base font-black text-purple-950 flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-base font-black text-purple-950">
             <ShieldCheck className="h-5 w-5 text-purple-600" />
-
-            <span>
-              LAPORAN KEUANGAN & BAGI HASIL
-              INVESTOR
-            </span>
+            LAPORAN KEUANGAN & BAGI HASIL
+            INVESTOR
           </h2>
 
-          <p className="text-xs text-purple-700 font-medium">
+          <p className="text-xs font-medium text-purple-700">
             SHARING POOL berdasarkan Kas &
             Bank aktual dan settlement investor
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-
           <button
             onClick={() =>
               handleExport('CSV')
             }
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
           >
-            <Download className="h-3.5 w-3.5 text-slate-500" />
-
-            <span>
-              Export CSV
-            </span>
+            <Download className="h-3.5 w-3.5" />
+            Export CSV
           </button>
 
           <button
             onClick={() =>
               handleExport('XLSX')
             }
-            className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-purple-700 transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-purple-700"
           >
             <FileSpreadsheet className="h-3.5 w-3.5" />
-
-            <span>
-              Export Excel (.xlsx)
-            </span>
+            Export Excel (.xlsx)
           </button>
         </div>
       </div>
 
-      {/* ======================================================
-          PRIMARY KPI
-          ====================================================== */}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-
-        {/* KAS MASUK */}
-
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 shadow-2xs">
-
-          <div className="flex items-center justify-between mb-1">
-
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+          <div className="mb-1 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">
               KAS & BANK
               <br />
               UANG MASUK SHARING
             </span>
-
             <ArrowDownRight className="h-4 w-4 text-emerald-600" />
           </div>
 
-          <div className="text-xl font-black text-emerald-950 font-mono tracking-tight">
+          <div className="font-mono text-xl font-black text-emerald-950">
             {formatRupiah(
               uangMasukSharing
             )}
@@ -419,27 +362,21 @@ export const InvestorReportView: React.FC<
           </div>
 
           <div className="mt-2 text-[10px] font-bold text-emerald-600">
-            {jumlahUangMasuk}{' '}
-            transaksi
+            {jumlahUangMasuk} transaksi
           </div>
         </div>
 
-        {/* KAS KELUAR */}
-
-        <div className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 shadow-2xs">
-
-          <div className="flex items-center justify-between mb-1">
-
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
+          <div className="mb-1 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-wider text-rose-700">
               KAS & BANK
               <br />
               UANG KELUAR SHARING
             </span>
-
             <ArrowUpRight className="h-4 w-4 text-rose-600" />
           </div>
 
-          <div className="text-xl font-black text-rose-950 font-mono tracking-tight">
+          <div className="font-mono text-xl font-black text-rose-950">
             {formatRupiah(
               uangKeluarSharing
             )}
@@ -451,30 +388,22 @@ export const InvestorReportView: React.FC<
           </div>
 
           <div className="mt-2 text-[10px] font-bold text-rose-600">
-            {jumlahUangKeluar}{' '}
-            transaksi
+            {jumlahUangKeluar} transaksi
           </div>
         </div>
 
-        {/* SALDO */}
-
-        <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4 shadow-2xs">
-
-          <div className="flex items-center justify-between mb-1">
-
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4">
+          <div className="mb-1 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-wider text-blue-700">
               SALDO KAS & BANK
               <br />
               SHARING
             </span>
-
             <Wallet className="h-4 w-4 text-blue-600" />
           </div>
 
-          <div className="text-xl font-black text-blue-950 font-mono tracking-tight">
-            {formatRupiah(
-              saldoSharing
-            )}
+          <div className="font-mono text-xl font-black text-blue-950">
+            {formatRupiah(saldoSharing)}
           </div>
 
           <div className="mt-1 text-[11px] text-blue-700">
@@ -482,26 +411,21 @@ export const InvestorReportView: React.FC<
           </div>
         </div>
 
-        {/* HAK INVESTOR */}
-
-        <div className="rounded-2xl border border-purple-200 bg-purple-50/70 p-4 shadow-2xs">
-
-          <div className="flex items-center justify-between mb-1">
-
+        <div className="rounded-2xl border border-purple-200 bg-purple-50/70 p-4">
+          <div className="mb-1 flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-wider text-purple-700">
               TOTAL HAK INVESTOR
             </span>
-
             <ShieldCheck className="h-4 w-4 text-purple-600" />
           </div>
 
-          <div className="text-xl font-black text-purple-950 font-mono tracking-tight">
+          <div className="font-mono text-xl font-black text-purple-950">
             {formatRupiah(
               totalHakInvestor
             )}
           </div>
 
-          <div className="mt-1 text-[11px] text-purple-700 font-bold">
+          <div className="mt-1 text-[11px] font-bold text-purple-700">
             Sudah Dibayar:{' '}
             {formatRupiah(
               totalSudahDibayar
@@ -510,34 +434,27 @@ export const InvestorReportView: React.FC<
         </div>
       </div>
 
-      {/* ======================================================
-          KOMISI REAL WARNING
-          ====================================================== */}
-
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-
         <div className="flex items-start gap-3">
-
-          <Landmark className="h-5 w-5 text-amber-700 mt-0.5 shrink-0" />
+          <Landmark className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
 
           <div>
-
             <div className="text-xs font-black uppercase tracking-wider text-amber-900">
               Komisi Real Bukan Saldo Bank
             </div>
 
-            <p className="text-xs text-amber-800 mt-1 font-medium">
-              Komisi Real TikTok hanya merupakan
-              data performa akun. Nilai tersebut
-              baru masuk ke Kas & Bank setelah
-              dilakukan Pindah Dana.
+            <p className="mt-1 text-xs font-medium text-amber-800">
+              Komisi Real TikTok adalah data
+              performa akun. Nilainya baru
+              menjadi Kas & Bank setelah
+              Pindah Dana.
             </p>
 
             {totalKomisiRealExcluded > 0 && (
               <div className="mt-2 text-[10px] font-bold text-amber-700">
-                Data Komisi Real lama yang
-                ditemukan dan dikecualikan dari
-                Kas & Bank:{' '}
+                Komisi Real lama yang
+                dikecualikan:
+                {' '}
                 {formatRupiah(
                   totalKomisiRealExcluded
                 )}
@@ -547,52 +464,40 @@ export const InvestorReportView: React.FC<
         </div>
       </div>
 
-      {/* ======================================================
-          INVESTOR PAYMENT STATUS
-          ====================================================== */}
-
-      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-
+      <div className="flex flex-col justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs sm:flex-row sm:items-center">
         <div>
-
-          <div className="font-black text-amber-900 uppercase tracking-wider">
-            Sisa Kewajiban Pembayaran Bagi
-            Hasil Investor
+          <div className="font-black uppercase tracking-wider text-amber-900">
+            Sisa Kewajiban Pembayaran
+            Bagi Hasil Investor
           </div>
 
-          <div className="text-amber-700 font-medium mt-0.5">
-            Akumulasi settlement yang belum
-            dibayar ke investor
+          <div className="mt-0.5 font-medium text-amber-700">
+            Akumulasi settlement yang
+            belum dibayar.
           </div>
         </div>
 
-        <div className="text-xl font-black font-mono text-amber-950 whitespace-nowrap">
+        <div className="whitespace-nowrap font-mono text-xl font-black text-amber-950">
           {formatRupiah(
             totalBelumDibayar
           )}
         </div>
       </div>
 
-      {/* ======================================================
-          PAYMENT COVERAGE
-          ====================================================== */}
-
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
-
-        <div className="flex items-center justify-between mb-3">
-
+        <div className="mb-3 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+            <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">
               Posisi Kas terhadap Hak Investor
             </h3>
 
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Informasi indikator, bukan transaksi
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Indikator posisi kas, bukan
               pembayaran otomatis.
             </p>
           </div>
 
-          <span className="text-sm font-black font-mono text-indigo-700">
+          <span className="font-mono text-sm font-black text-indigo-700">
             {Math.min(
               100,
               Math.max(
@@ -604,8 +509,7 @@ export const InvestorReportView: React.FC<
           </span>
         </div>
 
-        <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
-
+        <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100">
           <div
             className="h-full rounded-full bg-indigo-500 transition-all"
             style={{
@@ -637,74 +541,53 @@ export const InvestorReportView: React.FC<
         </div>
       </div>
 
-      {/* ======================================================
-          SETTLEMENT TABLE
-          ====================================================== */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
+        <div className="border-b border-slate-100 p-4">
+          <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">
+            Rekapitulasi Hak Bagi Hasil
+            Investor Per Periode
+          </h3>
 
-      <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
-
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-
-          <div>
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-              Rekapitulasi Hak Bagi Hasil
-              Investor Per Periode
-            </h3>
-
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              {sharingSettlements.length}{' '}
-              settlement
-            </p>
-          </div>
+          <p className="mt-0.5 text-[10px] text-slate-500">
+            {sharingSettlements.length}{' '}
+            settlement
+          </p>
         </div>
 
         <div className="overflow-x-auto">
-
-          <table className="w-full text-left text-xs border-collapse">
-
+          <table className="w-full border-collapse text-left text-xs">
             <thead>
-
-              <tr className="border-b border-slate-200 bg-slate-50 font-black text-slate-700 uppercase tracking-wider">
-
-                <th className="py-3 px-4">
+              <tr className="border-b border-slate-200 bg-slate-50 font-black uppercase tracking-wider text-slate-700">
+                <th className="px-4 py-3">
                   Periode
                 </th>
-
-                <th className="py-3 px-4">
+                <th className="px-4 py-3">
                   Tier
                 </th>
-
-                <th className="py-3 px-4 text-right">
+                <th className="px-4 py-3 text-right">
                   Kas & Bank Masuk
                 </th>
-
-                <th className="py-3 px-4 text-right">
+                <th className="px-4 py-3 text-right">
                   Hak Investor
                 </th>
-
-                <th className="py-3 px-4 text-right">
+                <th className="px-4 py-3 text-right">
                   Sudah Dibayar
                 </th>
-
-                <th className="py-3 px-4 text-right">
+                <th className="px-4 py-3 text-right">
                   Sisa
                 </th>
-
-                <th className="py-3 px-4 text-center">
+                <th className="px-4 py-3 text-center">
                   Status
                 </th>
-
-                <th className="py-3 px-4 text-center">
+                <th className="px-4 py-3 text-center">
                   Tanggal Cair
                 </th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-slate-100">
-
               {sharingSettlements.map(
                 (settlement) => {
-
                   const hak =
                     Number(
                       settlement.bagianInvestor
@@ -728,54 +611,43 @@ export const InvestorReportView: React.FC<
                         settlement.id ||
                         settlement.settlementId
                       }
-                      className="hover:bg-slate-50 transition-colors"
+                      className="hover:bg-slate-50"
                     >
-
-                      <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                        {
-                          settlement.period
-                        }
+                      <td className="px-4 py-3 font-mono font-bold text-slate-900">
+                        {settlement.period}
                       </td>
 
-                      <td className="py-3 px-4">
-
-                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-800">
-                          {
-                            settlement.tierName ||
-                            `Tier ${settlement.tier}`
-                          }
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded bg-purple-100 px-2 py-0.5 text-[10px] font-black text-purple-800">
+                          {settlement.tierName ||
+                            `Tier ${settlement.tier}`}
                         </span>
                       </td>
 
-                      <td className="py-3 px-4 text-right font-mono text-emerald-700 font-bold">
+                      <td className="px-4 py-3 text-right font-mono font-bold text-emerald-700">
                         {formatRupiah(
                           settlement.totalUangMasuk ||
                             0
                         )}
                       </td>
 
-                      <td className="py-3 px-4 text-right font-mono font-black text-purple-800">
-                        {formatRupiah(
-                          hak
-                        )}
+                      <td className="px-4 py-3 text-right font-mono font-black text-purple-800">
+                        {formatRupiah(hak)}
                       </td>
 
-                      <td className="py-3 px-4 text-right font-mono text-emerald-700 font-bold">
-                        {formatRupiah(
-                          paid
-                        )}
+                      <td className="px-4 py-3 text-right font-mono font-bold text-emerald-700">
+                        {formatRupiah(paid)}
                       </td>
 
-                      <td className="py-3 px-4 text-right font-mono text-amber-700 font-bold">
+                      <td className="px-4 py-3 text-right font-mono font-bold text-amber-700">
                         {formatRupiah(
                           remaining
                         )}
                       </td>
 
-                      <td className="py-3 px-4 text-center whitespace-nowrap">
-
+                      <td className="px-4 py-3 text-center">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black ${
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-black ${
                             settlement.statusPembayaran ===
                             'PAID'
                               ? 'bg-emerald-100 text-emerald-800'
@@ -788,12 +660,10 @@ export const InvestorReportView: React.FC<
                         </span>
                       </td>
 
-                      <td className="py-3 px-4 text-center whitespace-nowrap font-mono text-[10px] text-slate-500">
-                        {
-                          settlement.settledDate ||
+                      <td className="px-4 py-3 text-center font-mono text-[10px] text-slate-500">
+                        {settlement.settledDate ||
                           settlement.paidDate ||
-                          '-'
-                        }
+                          '-'}
                       </td>
                     </tr>
                   );
@@ -805,10 +675,11 @@ export const InvestorReportView: React.FC<
                 <tr>
                   <td
                     colSpan={8}
-                    className="py-12 text-center text-xs text-slate-400 italic"
+                    className="py-12 text-center text-xs italic text-slate-400"
                   >
-                    Belum ada data bagi hasil
-                    investor pada periode ini.
+                    Belum ada data bagi
+                    hasil investor pada
+                    periode ini.
                   </td>
                 </tr>
               )}
@@ -817,49 +688,42 @@ export const InvestorReportView: React.FC<
         </div>
       </div>
 
-      {/* ======================================================
-          ACCOUNTING NOTE
-          ====================================================== */}
-
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-
         <div className="text-[10px] font-black uppercase tracking-wider text-slate-700">
           Prinsip Laporan Investor
         </div>
 
-        <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] text-slate-600">
-
-          <div className="rounded-xl bg-white border border-slate-200 p-3">
+        <div className="mt-2 grid grid-cols-1 gap-3 text-[11px] text-slate-600 md:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
             <div className="font-black text-purple-800">
               1. Performa Akun
             </div>
-
             <div className="mt-1">
               GMV dan Komisi Real adalah
-              performa dan bukan saldo rekening.
+              performa, bukan saldo rekening.
             </div>
           </div>
 
-          <div className="rounded-xl bg-white border border-slate-200 p-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
             <div className="font-black text-emerald-800">
               2. Kas & Bank
             </div>
-
             <div className="mt-1">
-              Hanya uang yang benar-benar masuk
-              atau keluar yang mempengaruhi saldo.
+              Hanya uang yang benar-benar
+              masuk atau keluar yang
+              mempengaruhi saldo.
             </div>
           </div>
 
-          <div className="rounded-xl bg-white border border-slate-200 p-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
             <div className="font-black text-indigo-800">
               3. Pindah Dana
             </div>
-
             <div className="mt-1">
-              Komisi Real menjadi Kas & Bank
-              setelah pencairan, menggunakan
-              dana bersih setelah admin.
+              Komisi Real menjadi Kas &
+              Bank setelah pencairan,
+              menggunakan dana bersih
+              setelah admin.
             </div>
           </div>
         </div>
