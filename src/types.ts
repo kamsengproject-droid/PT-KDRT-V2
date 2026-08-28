@@ -187,6 +187,10 @@ export interface FinancialTransaction {
   // Account / TikTok info (Performa context)
   accountId?: string | null;
   accountName?: string | null;
+  sourceAccountId?: string | null;
+  sourceAccountName?: string | null;
+  destinationAccountName?: string | null;
+  sourcePerformanceId?: string | null;
   gmv?: number; // Metrik performa saja (bukan uang kas)
   estimatedCommission?: number; // Metrik performa saja (bukan uang kas)
   realCommission?: number; // Nominal masuk kas

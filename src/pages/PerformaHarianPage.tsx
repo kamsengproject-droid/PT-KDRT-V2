@@ -533,7 +533,7 @@ export const PerformaHarianPage: React.FC<{
       );
 
       setSuccessMessage(
-        `Komisi Real ${formatRupiah(Number(komisiForm.realCommission))} tersimpan. Dana siap dicairkan melalui menu Pindah Dana.`
+        `Komisi Real ${formatRupiah(Number(komisiForm.realCommission))} berhasil disimpan dan otomatis tercatat sebagai Uang Masuk di Buku Kas & Bank (BCA PT KDRT).`
       );
 
       setKomisiForm((prev) => ({ ...prev, realCommission: '', notes: '' }));
@@ -569,7 +569,7 @@ export const PerformaHarianPage: React.FC<{
         userProfile?.name || 'User'
       );
 
-      setSuccessMessage('Data Komisi Real berhasil diperbarui pada Firebase. Semua panel telah dihitung ulang.');
+      setSuccessMessage('Data Komisi Real berhasil diperbarui dan transaksi Buku Kas & Bank telah disinkronkan.');
       setEditKomisiRecord(null);
     } catch (err: any) {
       setErrorMessage(err.message || 'Gagal memperbarui Komisi Real.');
@@ -592,7 +592,7 @@ export const PerformaHarianPage: React.FC<{
       );
 
       setSuccessMessage(
-        `Data ${deletingPerformance.type === 'GMV' ? 'GMV' : 'Komisi Real'} berhasil dihapus permanen dari Firebase.`
+        `Data ${deletingPerformance.type === 'GMV' ? 'GMV' : 'Komisi Real'} beserta transaksi Buku Kas & Bank terkait berhasil dihapus.`
       );
       setDeletingPerformance(null);
     } catch (err: any) {

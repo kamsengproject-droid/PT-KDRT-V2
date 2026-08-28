@@ -32,22 +32,15 @@ import { catatAuditLog } from './auditService';
  * - Item Sold
  * - Product Impression
  *
- * IMPORTANT:
- * Komisi Real TIDAK dibuat sebagai transaksi Kas & Bank.
- *
- * Komisi Real baru menjadi uang rekening aktual setelah:
- *
- * Komisi Real
- *      ↓
- * Pindah Dana
- *      ↓
- * transactions / Kas & Bank
- *
- * Dengan demikian:
- *
- * Dashboard Akun ≠ Saldo Bank
- *
- * Saldo Bank hanya berasal dari transaksi Kas & Bank aktual.
+ * SINKRONISASI OTOMATIS:
+ * Setiap Komisi Real (commissionReal > 0) dianggap sebagai Uang Masuk
+ * perusahaan dan secara otomatis disinkronkan ke Buku Kas & Bank
+ * (`transactions`) dengan:
+ * - Deterministic ID: COMMISSION_REAL_${performanceId}
+ * - Akun Tujuan: BCA PT KDRT
+ * - Kategori: KOMISI_TIKTOK
+ * - Tipe: INCOME (Uang Masuk)
+ * - Anti-duplikasi & Idempotent
  */
 
 /* ============================================================
@@ -109,13 +102,7 @@ export function getPerformanceDocId(
 }
 
 /**
- * Legacy transaction ID.
- *
- * Fungsi ini tetap dipertahankan untuk kompatibilitas
- * dengan data lama dan proses cleanup historical transaction.
- *
- * IMPORTANT:
- * Fungsi ini TIDAK lagi dipakai ketika menyimpan Komisi Real baru.
+ * Deterministic transaction ID untuk Komisi Real di Buku Kas & Bank.
  */
 export function getTransactionDocId(
   performanceId: string
@@ -145,24 +132,147 @@ export async function checkDuplicatePerformance(
 }
 
 /* ============================================================
+   3B. SINKRONISASI SINGLE KOMISI REAL KE TRANSAKSI BUKU KAS & BANK
+   ============================================================ */
+
+export async function syncKomisiRealToTransaction(
+  perfDoc: {
+    id: string;
+    date: string;
+    accountId: string;
+    accountName?: string;
+    scope?: ScopeType;
+    commissionReal?: number;
+    realCommission?: number;
+    commissionNotes?: string;
+    notes?: string;
+  },
+  currentUserId: string = 'system',
+  currentUserName: string = 'Sistem Auto-Sync'
+): Promise<string | null> {
+  try {
+    const commValue = Number(perfDoc.commissionReal ?? perfDoc.realCommission) || 0;
+    const txId = getTransactionDocId(perfDoc.id);
+    const txRef = doc(db, 'transactions', txId);
+
+    if (commValue <= 0) {
+      // Jika nominal 0 atau negatif, hapus transaksi terkait jika ada
+      const existingSnap = await getDoc(txRef);
+      if (existingSnap.exists()) {
+        await deleteDoc(txRef);
+      }
+      return null;
+    }
+
+    const existingSnap = await getDoc(txRef);
+    const existingTx = existingSnap.exists() ? existingSnap.data() : null;
+
+    const txPayload: any = {
+      id: txId,
+      transactionId: txId,
+      type: 'INCOME',
+      amount: commValue,
+      date: perfDoc.date,
+      category: 'KOMISI_TIKTOK',
+      scope: perfDoc.scope || 'SHARING',
+      sourceType: 'COMMISSION_REAL',
+      referenceId: perfDoc.id,
+      sourcePerformanceId: perfDoc.id,
+      performanceId: perfDoc.id,
+      sourceAccountId: perfDoc.accountId,
+      sourceAccountName: perfDoc.accountName || perfDoc.accountId,
+      destinationAccountName: 'BCA PT KDRT',
+      accountName: 'BCA PT KDRT',
+      accountId: 'BCA PT KDRT',
+      paymentMethod: 'TRANSFER',
+      description: `Komisi Real ${perfDoc.accountName || perfDoc.accountId} (${perfDoc.date})`,
+      notes: perfDoc.commissionNotes || perfDoc.notes || '',
+      status: 'ACTIVE',
+      updatedAt: serverTimestamp(),
+      updatedBy: currentUserId,
+      updatedByName: currentUserName,
+    };
+
+    if (!existingTx) {
+      txPayload.createdAt = serverTimestamp();
+      txPayload.createdBy = currentUserId;
+      txPayload.createdByName = currentUserName;
+    }
+
+    await setDoc(txRef, txPayload, { merge: true });
+    return txId;
+  } catch (error) {
+    console.error('Gagal sinkronisasi Komisi Real ke Transaksi:', error);
+    throw error;
+  }
+}
+
+/* ============================================================
+   3C. RECONCILIATION / BACKFILL SEMUA KOMISI REAL
+   ============================================================ */
+
+/**
+ * Menyelaraskan seluruh data Komisi Real di dailyPerformance
+ * yang belum ada di transactions (termasuk tanggal 24-28 Agustus).
+ * Bersifat IDEMPOTENT dan aman dijalankan berulang kali.
+ */
+export async function syncAllKomisiRealToTransactions(
+  currentUserId: string = 'system',
+  currentUserName: string = 'Sistem Auto-Sync'
+): Promise<{ totalChecked: number; totalSynced: number; details: string[] }> {
+  try {
+    const perfCol = collection(db, 'dailyPerformance');
+    const perfSnap = await getDocs(perfCol);
+
+    let totalChecked = 0;
+    let totalSynced = 0;
+    const details: string[] = [];
+
+    for (const docSnap of perfSnap.docs) {
+      const pData = docSnap.data() as DailyPerformance;
+      const comm = Number(pData.commissionReal ?? pData.realCommission ?? 0);
+      totalChecked++;
+
+      if (comm > 0) {
+        const txId = await syncKomisiRealToTransaction(
+          {
+            id: docSnap.id,
+            date: pData.date,
+            accountId: pData.accountId,
+            accountName: pData.accountName,
+            scope: pData.scope,
+            commissionReal: comm,
+            realCommission: comm,
+            commissionNotes: pData.commissionNotes,
+            notes: pData.notes,
+          },
+          currentUserId,
+          currentUserName
+        );
+
+        if (txId) {
+          totalSynced++;
+          details.push(
+            `${pData.accountName || pData.accountId} (${pData.date}) -> Rp ${comm.toLocaleString('id-ID')}`
+          );
+        }
+      }
+    }
+
+    return { totalChecked, totalSynced, details };
+  } catch (error) {
+    console.error('Error saat rekonsiliasi Komisi Real ke Buku Kas & Bank:', error);
+    throw error;
+  }
+}
+
+/* ============================================================
    4. SAVE KOMISI REAL
    ============================================================ */
 
 /**
- * Menyimpan Komisi Real ke dailyPerformance.
- *
- * IMPORTANT:
- * Fungsi ini TIDAK membuat transaksi ke collection
- * `transactions`.
- *
- * Alasannya:
- *
- * Komisi Real = data performa akun.
- *
- * Komisi Real belum tentu berarti uang sudah masuk rekening
- * perusahaan.
- *
- * Uang rekening baru dicatat melalui Pindah Dana.
+ * Menyimpan Komisi Real ke dailyPerformance DAN otomatis
+ * mencatat Uang Masuk ke Buku Kas & Bank (transactions).
  */
 export async function saveKomisiReal(
   entry: Partial<
@@ -315,12 +425,6 @@ export async function saveKomisiReal(
       productImpression:
         productImpressionValue,
 
-      /**
-       * Dua field ini sengaja tetap disimpan.
-       *
-       * commissionReal = field utama
-       * realCommission = legacy compatibility
-       */
       commissionReal:
         commissionValue,
 
@@ -335,7 +439,7 @@ export async function saveKomisiReal(
     };
 
     /* --------------------------------------------------------
-       SIMPAN DAILY PERFORMANCE SAJA
+       SIMPAN DAILY PERFORMANCE
        -------------------------------------------------------- */
 
     await setDoc(
@@ -357,6 +461,24 @@ export async function saveKomisiReal(
     );
 
     /* --------------------------------------------------------
+       AUTO-SYNC KE BUKU KAS & BANK (TRANSACTIONS)
+       -------------------------------------------------------- */
+    await syncKomisiRealToTransaction(
+      {
+        id: perfId,
+        date: entry.date,
+        accountId: entry.accountId,
+        accountName: perfData.accountName,
+        scope: perfData.scope as ScopeType,
+        commissionReal: commissionValue,
+        realCommission: commissionValue,
+        commissionNotes: perfData.commissionNotes,
+      },
+      currentUserId,
+      currentUserName
+    );
+
+    /* --------------------------------------------------------
        AUDIT LOG
        -------------------------------------------------------- */
 
@@ -372,15 +494,9 @@ export async function saveKomisiReal(
         'id-ID'
       )}, Komisi Real: Rp ${commissionValue.toLocaleString(
         'id-ID'
-      )}`
+      )} (Tersinkron ke Buku Kas & Bank BCA PT KDRT)`
     );
 
-    /**
-     * Return performance document ID.
-     *
-     * Tidak ada transaction ID karena Komisi Real
-     * sekarang bukan transaksi Kas & Bank.
-     */
     return perfId;
   } catch (error) {
     handleFirestoreError(
@@ -671,12 +787,31 @@ export async function deleteKomisiRealAtomic(
     );
 
     /* --------------------------------------------------------
-       DELETE DETERMINISTIC LEGACY TX
+       DELETE DETERMINISTIC LEGACY TX & SYNCED TRANSACTIONS
        -------------------------------------------------------- */
 
     batch.delete(
       txRef
     );
+
+    // Also delete any other linked transactions
+    try {
+      const qSource = query(
+        collection(db, 'transactions'),
+        where('sourcePerformanceId', '==', performanceId)
+      );
+      const snapSource = await getDocs(qSource);
+      snapSource.docs.forEach((d) => batch.delete(d.ref));
+
+      const qRef = query(
+        collection(db, 'transactions'),
+        where('referenceId', '==', performanceId)
+      );
+      const snapRef = await getDocs(qRef);
+      snapRef.docs.forEach((d) => batch.delete(d.ref));
+    } catch (qErr) {
+      console.warn('Query secondary transactions on delete:', qErr);
+    }
 
     /* --------------------------------------------------------
        COMMIT
@@ -693,7 +828,7 @@ export async function deleteKomisiRealAtomic(
       currentUserName,
       'DELETE_KOMISI_REAL',
       performanceId,
-      `Dihapus beserta transaksi legacy. Alasan: ${desc}`
+      `Dihapus beserta transaksi Buku Kas & Bank terkait. Alasan: ${desc}`
     );
   } catch (error) {
     handleFirestoreError(
@@ -935,17 +1070,44 @@ export async function updateDailyPerformanceKomisi(
     const targetRef = doc(db, 'dailyPerformance', targetDocId);
     await setDoc(targetRef, payload, { merge: true });
 
-    // Clean up old doc if ID changed
-    if (originalDocId && originalDocId !== targetDocId && oldSnap.exists()) {
-      await deleteDoc(oldRef);
+    // Clean up old doc & old transaction if ID changed
+    if (originalDocId && originalDocId !== targetDocId) {
+      if (oldSnap.exists()) {
+        await deleteDoc(oldRef);
+      }
+      try {
+        const oldTxRef = doc(db, 'transactions', getTransactionDocId(originalDocId));
+        const oldTxSnap = await getDoc(oldTxRef);
+        if (oldTxSnap.exists()) {
+          await deleteDoc(oldTxRef);
+        }
+      } catch (txErr) {
+        console.warn('Gagal hapus transaksi lama saat update ID performa:', txErr);
+      }
     }
+
+    // Auto-sync ke Buku Kas & Bank
+    await syncKomisiRealToTransaction(
+      {
+        id: targetDocId,
+        date: entry.date,
+        accountId: entry.accountId,
+        accountName: entry.accountName,
+        scope: entry.scope,
+        commissionReal: commVal,
+        realCommission: commVal,
+        commissionNotes: payload.commissionNotes,
+      },
+      currentUserId,
+      currentUserName
+    );
 
     await catatAuditLog(
       currentUserId,
       currentUserName,
       'UPDATE_KOMISI_REAL',
       entry.accountName || entry.accountId,
-      `Tanggal: ${entry.date}, Komisi Real: Rp ${commVal.toLocaleString('id-ID')}, Catatan: ${payload.commissionNotes || '-'}`
+      `Tanggal: ${entry.date}, Komisi Real: Rp ${commVal.toLocaleString('id-ID')}, Catatan: ${payload.commissionNotes || '-'} (Tersinkron ke Buku Kas & Bank)`
     );
 
     return targetDocId;

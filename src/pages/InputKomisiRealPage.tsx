@@ -129,7 +129,7 @@ export const InputKomisiRealPage: React.FC<{ onBackToPortal?: () => void }> = ({
       );
 
       setSuccessMessage(
-        `Komisi Real Rp ${Number(formData.realCommission).toLocaleString('id-ID')} tersimpan. Dana siap dicairkan melalui menu Pindah Dana.`
+        `Komisi Real Rp ${Number(formData.realCommission).toLocaleString('id-ID')} berhasil disimpan dan otomatis tercatat sebagai Uang Masuk di Buku Kas & Bank (BCA PT KDRT).`
       );
       setFormData(prev => ({
         ...prev,

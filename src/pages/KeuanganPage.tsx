@@ -45,6 +45,7 @@ import {
 } from '../utils/formatters';
 import { CurrencyInput } from '../components/CurrencyInput';
 import { catatAuditLog } from '../services/auditService';
+import { syncAllKomisiRealToTransactions } from '../services/performanceService';
 
 interface KeuanganPageProps {
   onBackToPortal?: () => void;
@@ -52,6 +53,7 @@ interface KeuanganPageProps {
 
 // Preset Akun Kas & Bank
 const PRESET_ACCOUNTS = [
+  'BCA PT KDRT',
   'Kas Tunai',
   'BCA',
   'Mandiri',
@@ -127,12 +129,42 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
 
   // 5. Toast Notification
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [syncingKomisi, setSyncingKomisi] = useState(false);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => {
       setToast(null);
     }, 4000);
+  };
+
+  // Auto-sync / Backfill historical Komisi Real to transactions on mount
+  useEffect(() => {
+    syncAllKomisiRealToTransactions(currentUser?.uid || 'system', userProfile?.name || 'Sistem Auto-Sync')
+      .then((res) => {
+        if (res.totalSynced > 0) {
+          console.log(`Auto-synced ${res.totalSynced} Komisi Real to Buku Kas & Bank.`);
+        }
+      })
+      .catch((err) => {
+        console.warn('Auto-sync Komisi Real failed on mount:', err);
+      });
+  }, [currentUser?.uid, userProfile?.name]);
+
+  // Manual Trigger Sync Komisi Real
+  const handleManualSync = async () => {
+    setSyncingKomisi(true);
+    try {
+      const res = await syncAllKomisiRealToTransactions(
+        currentUser?.uid || 'system',
+        userProfile?.name || 'Sistem Auto-Sync'
+      );
+      showToast(`Sinkronisasi selesai: ${res.totalSynced} data Komisi Real diselaraskan.`);
+    } catch (err: any) {
+      showToast('Gagal sinkronisasi Komisi Real: ' + (err.message || 'Error server'), 'error');
+    } finally {
+      setSyncingKomisi(false);
+    }
   };
 
   // Real-time Firestore Subscription
@@ -431,7 +463,9 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
       const currentUserId = currentUser?.uid || 'anonymous';
       const currentUserName = userProfile?.name || currentUser?.email || 'Admin';
 
-      const payload = {
+      const existingTx = isEditing && editingId ? transactions.find(t => (t.id || t.transactionId) === editingId) : null;
+
+      const payload: any = {
         date: formDate,
         type: formType,
         description: formDescription.trim(),
@@ -440,13 +474,20 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
         accountId: finalAccount,
         amount: finalAmount,
         notes: formNotes.trim(),
-        scope: 'SHARING',
-        sourceType: 'MANUAL',
+        scope: existingTx?.scope || 'SHARING',
+        sourceType: existingTx?.sourceType || 'MANUAL',
         status: 'ACTIVE',
         updatedAt: serverTimestamp(),
         updatedBy: currentUserId,
         updatedByName: currentUserName,
       };
+
+      if (existingTx?.sourcePerformanceId) payload.sourcePerformanceId = existingTx.sourcePerformanceId;
+      if (existingTx?.referenceId) payload.referenceId = existingTx.referenceId;
+      if (existingTx?.performanceId) payload.performanceId = existingTx.performanceId;
+      if (existingTx?.sourceAccountId) payload.sourceAccountId = existingTx.sourceAccountId;
+      if (existingTx?.sourceAccountName) payload.sourceAccountName = existingTx.sourceAccountName;
+      if (existingTx?.destinationAccountName) payload.destinationAccountName = existingTx.destinationAccountName;
 
       if (isEditing && editingId) {
         // Update existing document
@@ -623,6 +664,18 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2.5">
           <button
+            id="btn-sync-komisi-real"
+            type="button"
+            onClick={handleManualSync}
+            disabled={syncingKomisi}
+            title="Sinkronkan data Komisi Real dari Menu Performa/Omset ke Buku Kas & Bank"
+            className="flex items-center gap-1.5 rounded-xl border border-cyan-500/30 bg-cyan-950/40 px-3.5 py-2.5 text-xs font-bold text-cyan-300 hover:bg-cyan-900/50 hover:text-white transition active:scale-95 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${syncingKomisi ? 'animate-spin' : ''}`} />
+            <span>{syncingKomisi ? 'Menyinkronkan...' : 'Sinkronkan Komisi Real'}</span>
+          </button>
+
+          <button
             id="btn-input-uang-masuk"
             type="button"
             onClick={() => handleOpenAddModal('INCOME')}
@@ -645,27 +698,27 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
       </div>
 
       {/* ============================================================
-          TOP 4 DASHBOARD PANELS
+          TOP 3 DASHBOARD PANELS
       ============================================================ */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {/* PANEL 1: TOTAL UANG MASUK */}
         <div
           id="panel-total-uang-masuk"
-          className="relative overflow-hidden rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-emerald-950/30 p-5 shadow-lg"
+          className="relative overflow-hidden rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-emerald-950/30 p-5 sm:p-6 shadow-lg flex flex-col justify-between"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
               1. Total Uang Masuk
             </span>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
               <ArrowDownLeft className="h-5 w-5" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black tracking-tight text-emerald-400">
+          <div className="mt-4">
+            <div className="text-2xl sm:text-3xl font-black tracking-tight text-emerald-400">
               {formatRupiah(selectedMonth ? periodCalculations.totalInMonth : globalCalculations.totalIn)}
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
+            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
               <span>{selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}</span>
               {selectedMonth && (
                 <span className="text-zinc-400 text-[11px]">
@@ -679,21 +732,21 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
         {/* PANEL 2: TOTAL UANG KELUAR */}
         <div
           id="panel-total-uang-keluar"
-          className="relative overflow-hidden rounded-2xl border border-rose-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-rose-950/30 p-5 shadow-lg"
+          className="relative overflow-hidden rounded-2xl border border-rose-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-rose-950/30 p-5 sm:p-6 shadow-lg flex flex-col justify-between"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-rose-400">
               2. Total Uang Keluar
             </span>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400">
               <ArrowUpRight className="h-5 w-5" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black tracking-tight text-rose-400">
+          <div className="mt-4">
+            <div className="text-2xl sm:text-3xl font-black tracking-tight text-rose-400">
               {formatRupiah(selectedMonth ? periodCalculations.totalOutMonth : globalCalculations.totalOut)}
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
+            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
               <span>{selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}</span>
               {selectedMonth && (
                 <span className="text-zinc-400 text-[11px]">
@@ -704,29 +757,29 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
           </div>
         </div>
 
-        {/* PANEL 3: SALDO KAS & BANK */}
+        {/* PANEL 3: SALDO REAL PT KDRT SAAT INI */}
         <div
-          id="panel-saldo-kas-bank"
-          className="relative overflow-hidden rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-zinc-900/95 via-zinc-900/80 to-cyan-950/40 p-5 shadow-lg"
+          id="panel-saldo-real-pt-kdrt"
+          className="relative overflow-hidden rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-zinc-900/95 via-zinc-900/80 to-cyan-950/40 p-5 sm:p-6 shadow-lg flex flex-col justify-between"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-              3. Saldo Kas & Bank
+              3. Saldo Real PT KDRT Saat Ini
             </span>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400">
               <Wallet className="h-5 w-5" />
             </div>
           </div>
-          <div className="mt-3">
+          <div className="mt-4">
             <div
-              className={`text-2xl font-black tracking-tight ${
+              className={`text-2xl sm:text-3xl font-black tracking-tight ${
                 globalCalculations.grandTotalSaldo >= 0 ? 'text-white' : 'text-rose-400'
               }`}
             >
               {formatRupiah(globalCalculations.grandTotalSaldo)}
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
-              <span>Saldo Aktual Riil</span>
+            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
+              <span>Saldo Kas/Bank Aktual</span>
               {selectedMonth && (
                 <span
                   className={`text-[11px] font-semibold ${
@@ -738,48 +791,6 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
                 </span>
               )}
             </div>
-          </div>
-        </div>
-
-        {/* PANEL 4: TOTAL SALDO PER AKUN */}
-        <div
-          id="panel-saldo-per-akun"
-          className="relative overflow-hidden rounded-2xl border border-indigo-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-indigo-950/30 p-5 shadow-lg"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">
-              4. Total Saldo Per Akun
-            </span>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400">
-              <Landmark className="h-5 w-5" />
-            </div>
-          </div>
-          <div className="mt-2.5 max-h-24 overflow-y-auto pr-1 space-y-1.5 scrollbar-thin">
-            {allAccountNames.map((accName) => {
-              const accData = globalCalculations.accountBalances[accName] || { saldo: 0 };
-              const isSelected = filterAccount === accName;
-              return (
-                <button
-                  type="button"
-                  key={accName}
-                  onClick={() => setFilterAccount(isSelected ? 'ALL' : accName)}
-                  className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1 text-xs transition ${
-                    isSelected
-                      ? 'bg-indigo-600/30 text-indigo-200 border border-indigo-500/40'
-                      : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-800'
-                  }`}
-                >
-                  <span className="font-semibold truncate">{accName}</span>
-                  <span
-                    className={`font-mono text-[11px] font-bold ${
-                      accData.saldo >= 0 ? 'text-zinc-200' : 'text-rose-400'
-                    }`}
-                  >
-                    {formatRupiah(accData.saldo)}
-                  </span>
-                </button>
-              );
-            })}
           </div>
         </div>
       </div>
@@ -995,6 +1006,10 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
                   const isExpense = tx.type === 'EXPENSE';
                   const nominal = Number(tx.amount) || 0;
                   const acc = tx.accountName || (tx as any).account || tx.accountId || 'Kas Tunai';
+                  const isCommissionReal =
+                    tx.sourceType === 'COMMISSION_REAL' ||
+                    (tx.id || '').startsWith('COMMISSION_REAL_') ||
+                    Boolean(tx.sourcePerformanceId);
 
                   return (
                     <tr
@@ -1027,8 +1042,15 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
 
                       {/* 3. Keterangan */}
                       <td className="px-3 py-3.5 max-w-[280px]">
-                        <div className="font-semibold text-white truncate" title={tx.description}>
-                          {tx.description || '-'}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-white truncate" title={tx.description}>
+                            {tx.description || '-'}
+                          </span>
+                          {isCommissionReal && (
+                            <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-bold text-cyan-400 border border-cyan-500/30 shrink-0">
+                              Komisi Real TikTok
+                            </span>
+                          )}
                         </div>
                         {tx.notes && (
                           <div className="text-[11px] text-zinc-500 truncate" title={tx.notes}>
