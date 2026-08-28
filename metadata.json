@@ -1,0 +1,11 @@
+{
+  "name": "PT KDRT V3",
+  "description": "Sistem Manajemen Bisnis & Operasional PT KDRT V3 — Keuangan, Akun, Performa, Database Sampel, Karyawan, dan Profit Sharing",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

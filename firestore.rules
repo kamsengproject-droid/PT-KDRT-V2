@@ -1,0 +1,280 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =====================================================================
+    // KANTOR PT.KDRT — Firestore Security Rules
+    // Semua collection di bawah ini diambil langsung dari kode aplikasi
+    // (src/services/*, src/pages/*). Collection yang tidak terdaftar akan
+    // otomatis tertolak oleh aturan default-deny di bawah.
+    // =====================================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isOwner() {
+      return isAuthenticated() && (
+        getUserData().role == 'OWNER' ||
+        getUserData().role == 'ADMIN' ||
+        request.auth.token.email == 'kamsengproject@gmail.com' ||
+        request.auth.token.email == 'owner@kamsengproject.com' ||
+        request.auth.token.email == 'owner@kamseng.com' ||
+        request.auth.token.email == 'admin@kdrt.com'
+      );
+    }
+
+    function isManager() {
+      return isAuthenticated() && (
+        isOwner() ||
+        getUserData().role == 'MANAGER' ||
+        getUserData().role == 'ADMIN'
+      );
+    }
+
+    function isInvestor() {
+      return isAuthenticated() && getUserData().role == 'INVESTOR';
+    }
+
+    function isEmployee() {
+      return isAuthenticated() && getUserData().role == 'EMPLOYEE';
+    }
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // 1. IDENTITAS & KARYAWAN
+    // ---------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner() || request.auth.uid == userId;
+    }
+
+    match /employees/{employeeId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // ---------------------------------------------------------------
+    // 2. ABSENSI & PENGATURAN KANTOR
+    // ---------------------------------------------------------------
+    match /attendance/{attendanceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isOwner();
+    }
+
+    // Alias legacy (jamak)
+    match /attendances/{attendanceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isOwner();
+    }
+
+    match /attendanceBonuses/{bonusId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isOwner();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // Jadwal kerja, geofence, dan connection_test
+    match /workplaceSettings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    match /holidays/{holidayId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // ---------------------------------------------------------------
+    // 3. PENGGAJIAN
+    // ---------------------------------------------------------------
+    match /payroll/{payrollId} {
+      allow read: if isManager() || (
+        isEmployee() && resource.data.employeeId == getUserData().employeeId
+      );
+      allow write: if isManager();
+    }
+
+    match /payrolls/{payrollId} {
+      allow read: if isManager() || (
+        isEmployee() && resource.data.employeeId == getUserData().employeeId
+      );
+      allow write: if isManager();
+    }
+
+    // Input Manual Owner
+    match /weeklyCommissions/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    match /employeeCommissions/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // ---------------------------------------------------------------
+    // 4. KEUANGAN
+    // ---------------------------------------------------------------
+    match /transactions/{transactionId} {
+      allow read: if isManager() || (
+        isInvestor() && resource.data.scope == 'SHARING'
+      );
+      allow write: if isManager();
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    match /financialAdjustments/{adjustmentId} {
+      allow read: if isManager() || isInvestor();
+      allow write: if isOwner();
+    }
+
+    match /reconciliations/{reconciliationId} {
+      allow read: if isManager();
+      allow write: if isManager();
+    }
+
+    match /cashReconciliations/{reconciliationId} {
+      allow read: if isManager();
+      allow write: if isManager();
+    }
+
+    match /monthlyClosings/{closingId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner();
+    }
+
+    // ---------------------------------------------------------------
+    // 5. PERFORMA & AKUN MEDSOS
+    // ---------------------------------------------------------------
+    match /dailyPerformance/{performanceId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isManager() || isAuthenticated();
+    }
+
+    match /accounts/{accountId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    // ---------------------------------------------------------------
+    // 6. PRODUK, SAMPEL & INVENTARIS
+    // ---------------------------------------------------------------
+    match /products/{productId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    match /samples/{sampleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    match /samples_inventory/{itemId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    match /sampleLocations/{locationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    match /inventory/{itemId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    match /inventoryHistory/{historyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isOwner();
+    }
+
+    // ---------------------------------------------------------------
+    // 7. KERJAAN HARIAN & KONTEN
+    // ---------------------------------------------------------------
+    match /dailyTasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isManager();
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isManager();
+    }
+
+    match /taskTemplates/{templateId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    match /contentCalendar/{itemId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    match /contentTemplates/{templateId} {
+      allow read: if isAuthenticated();
+      allow write: if isManager();
+    }
+
+    match /contentSchedules/{scheduleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // ---------------------------------------------------------------
+    // 8. PROFIT SHARING & INVESTOR
+    // ---------------------------------------------------------------
+    match /profitSharingSettlements/{settlementId} {
+      allow read: if isManager() || isInvestor();
+      allow write: if isOwner();
+    }
+
+    match /profitSharingTiers/{tierId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner();
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow read: if isManager() || isInvestor();
+      allow write: if isOwner();
+    }
+
+    match /investorWithdrawals/{withdrawalId} {
+      allow read: if isManager() || isInvestor();
+      allow write: if isOwner();
+    }
+
+    // ---------------------------------------------------------------
+    // 9. AUDIT
+    // ---------------------------------------------------------------
+    match /auditLogs/{logId} {
+      allow read: if isManager();
+      allow create: if isAuthenticated();
+      allow update, delete: if isOwner();
+    }
+  }
+}
