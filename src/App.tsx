@@ -17,6 +17,7 @@ import { DashboardPribadiPage } from './pages/DashboardPribadiPage';
 import { AkunPage } from './pages/AkunPage';
 import { PerformaHarianPage } from './pages/PerformaHarianPage';
 import { KeuanganPage } from './pages/KeuanganPage';
+import { KeuanganPtKdrtPage } from './pages/KeuanganPtKdrtPage';
 import { ArusKasPage } from './pages/ArusKasPage';
 import { PengeluaranPage } from './pages/PengeluaranPage';
 import { ProfitSharingPage } from './pages/ProfitSharingPage';
@@ -27,6 +28,7 @@ import { PenataanLokasiPage } from './pages/PenataanLokasiPage';
 import { ProdukPage } from './pages/ProdukPage';
 import { SampelPage } from './pages/SampelPage';
 import { InventoryPage } from './pages/InventoryPage';
+import { HistoryPenarikanPage } from './pages/HistoryPenarikanPage';
 import { JadwalKontenPage } from './pages/JadwalKontenPage';
 import { LaporanPage } from './pages/LaporanPage';
 import { ExportCenterPage } from './pages/ExportCenterPage';
@@ -154,10 +156,27 @@ const MainLayout: React.FC = () => {
         );
 
       // 2. Business & Finance Modules
+      case 'keuangan-pt-kdrt':
+      case 'keuangan-pt':
+        if (role !== 'OWNER' && role !== 'MANAGER') {
+          return (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-8 text-center text-rose-900">
+              <Lock className="mx-auto h-10 w-10 text-rose-600 mb-2" />
+              <h3 className="font-bold text-base">Akses Dibatasi</h3>
+              <p className="text-xs text-rose-700 mt-1">
+                Keuangan PT KDRT hanya dapat diakses oleh Akun Owner / Manager PT.KDRT.
+              </p>
+            </div>
+          );
+        }
+        return <KeuanganPtKdrtPage onBackToPortal={handleBackToPortal} />;
       case 'keuangan':
       case 'arus-kas':
       case 'pengeluaran':
         return <KeuanganPage onBackToPortal={handleBackToPortal} />;
+      case 'history-penarikan':
+      case 'penarikan':
+        return <HistoryPenarikanPage onBackToPortal={handleBackToPortal} />;
       case 'profit-sharing':
         if (role === 'INVESTOR') {
           return <InvestorDashboardPage onBackToPortal={handleBackToPortal} />;

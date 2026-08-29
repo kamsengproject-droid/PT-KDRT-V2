@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -22,6 +23,7 @@ import {
   AttendanceBonusWeek,
   AttendanceRecord,
   Employee,
+  FinancialTransaction,
   Holiday,
   PayrollRecord,
   PayrollStatus,
@@ -320,17 +322,164 @@ export async function hitungDanSimpanSemuaBonusBulan(
 }
 
 /* ============================================================
+   UANG RAJIN DUAL-SYNC KE BUKU KAS & BANK (TRANSACTIONS)
+============================================================ */
+
+/**
+ * Deterministic Transaction ID untuk menghubungkan Uang Rajin Mingguan
+ * secara 1-to-1 dengan collection `transactions` Buku Kas & Bank.
+ */
+export function getUangRajinTxDocId(bonusId: string): string {
+  return `UANG_RAJIN_${bonusId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Sinkronisasi Uang Rajin Mingguan ke Buku Kas & Bank (`transactions` collection).
+ * - Jika status === 'SUDAH DIBAYAR' || status === 'PAID' || isPaid:
+ *     Catat / update transaksi 'EXPENSE' (Uang Keluar) di Buku Kas & Bank.
+ * - Jika status !== 'SUDAH DIBAYAR' (misal 'BELUM DIBAYAR', 'CALCULATED', 'APPROVED'):
+ *     Hapus transaksi dari Buku Kas & Bank agar data BELUM DIBAYAR tidak masuk ke Buku Kas & Bank.
+ * - Deterministic Document ID mencegah terjadinya transaksi duplikat.
+ */
+export async function syncUangRajinToTransaction(
+  bonus: AttendanceBonusWeek & { id: string },
+  currentUserId: string = 'system',
+  currentUserName: string = 'Sistem Auto-Sync'
+): Promise<string | null> {
+  const bonusId = bonus.id || `${bonus.employeeId || 'emp'}_${bonus.weekStart || 'week'}`;
+  const txId = getUangRajinTxDocId(bonusId);
+  const txRef = doc(db, 'transactions', txId);
+
+  const rawStatus = String(bonus.status || '').toUpperCase();
+  const isPaid =
+    rawStatus === 'SUDAH DIBAYAR' ||
+    rawStatus === 'PAID' ||
+    (bonus as any).isPaid === true ||
+    Boolean((bonus as any).paidAt);
+
+  const amount =
+    Number(bonus.finalBonus) ||
+    Number(bonus.bonusAmount) ||
+    Number(bonus.baseBonus) ||
+    Number((bonus as any).amount) ||
+    0;
+
+  try {
+    if (!isPaid || amount <= 0) {
+      // Hapus transaksi jika status bukan SUDAH DIBAYAR atau nominal 0
+      const existingSnap = await getDoc(txRef);
+      if (existingSnap.exists()) {
+        await deleteDoc(txRef);
+      }
+      return null;
+    }
+
+    // Status SUDAH DIBAYAR: Buat / Update transaksi deterministic (UANG KELUAR)
+    let rawAccount = (bonus.paymentAccount || '').trim();
+    if (!rawAccount || rawAccount === 'BCA') {
+      rawAccount = 'BCA PT KDRT';
+    }
+    const paymentAccount = rawAccount;
+
+    // Resolve date: paymentDate > weekStart > month-15 > today
+    let txDate = (bonus.paymentDate || bonus.weekStart || '').trim();
+    if (!txDate && bonus.month) {
+      txDate = `${bonus.month}-15`;
+    }
+    if (!txDate) {
+      txDate = tanggalHariIni();
+    }
+
+    const empName = bonus.employeeName || 'Karyawan';
+    const periodLabel = bonus.label || (bonus.month ? formatBulanTahun(bonus.month) : 'Mingguan');
+
+    const txPayload: Partial<FinancialTransaction> = {
+      type: 'EXPENSE',
+      amount: amount,
+      date: txDate,
+      category: 'Gaji & Upah Karyawan',
+      scope: 'SHARING',
+      sourceType: 'ATTENDANCE_BONUS',
+      referenceId: bonusId,
+      employeeId: bonus.employeeId || null,
+      employeeName: empName,
+      accountName: paymentAccount,
+      accountId: paymentAccount,
+      paymentMethod: 'TRANSFER',
+      description: `Uang Rajin ${empName} (${periodLabel})`,
+      notes: bonus.reason
+        ? `Uang Rajin Mingguan: ${empName} (${periodLabel}). ${bonus.reason}`
+        : `Uang Rajin Mingguan: ${empName} (${periodLabel}). Dibayar via ${paymentAccount}.`,
+      status: 'ACTIVE',
+      updatedAt: serverTimestamp(),
+      updatedBy: currentUserId,
+      updatedByName: currentUserName,
+    };
+
+    const existingSnap = await getDoc(txRef);
+    if (!existingSnap.exists()) {
+      txPayload.createdAt = serverTimestamp();
+      txPayload.createdBy = currentUserId;
+      txPayload.createdByName = currentUserName;
+    }
+
+    await setDoc(txRef, txPayload, { merge: true });
+    return txId;
+  } catch (error) {
+    console.error('Gagal sinkronisasi Uang Rajin ke Buku Kas & Bank:', error);
+    throw error;
+  }
+}
+
+/**
+ * Sinkronisasi massal seluruh data Uang Rajin ke Buku Kas & Bank:
+ * - Data berstatus SUDAH DIBAYAR dipastikan tercatat sebagai Uang Keluar.
+ * - Data berstatus BELUM DIBAYAR dipastikan bersih dari Buku Kas & Bank.
+ */
+export async function syncAllUangRajinToTransactions(
+  currentUserId: string = 'owner',
+  currentUserName: string = 'Owner PT.KDRT'
+): Promise<{ syncedCount: number; removedCount: number; totalScanned: number }> {
+  const colRef = collection(db, 'attendanceBonuses');
+  const snap = await getDocs(colRef);
+  let syncedCount = 0;
+  let removedCount = 0;
+
+  for (const d of snap.docs) {
+    const data = d.data();
+    const rec = { id: d.id, ...data } as AttendanceBonusWeek & { id: string };
+    const rawStatus = String(rec.status || '').toUpperCase();
+    const isPaid =
+      rawStatus === 'SUDAH DIBAYAR' ||
+      rawStatus === 'PAID' ||
+      (rec as any).isPaid === true ||
+      Boolean((rec as any).paidAt);
+
+    const res = await syncUangRajinToTransaction(rec, currentUserId, currentUserName);
+    if (isPaid && res) {
+      syncedCount++;
+    } else if (!isPaid) {
+      removedCount++;
+    }
+  }
+
+  return { syncedCount, removedCount, totalScanned: snap.docs.length };
+}
+
+/* ============================================================
    BAYAR UANG RAJIN
 ============================================================ */
 
 export async function bayarUangRajin(
   bonus: AttendanceBonusWeek,
   currentUserId: string,
-  currentUserName: string
+  currentUserName: string,
+  paymentAccount: string = 'BCA'
 ) {
   if (
     bonus.status ===
-    'SUDAH DIBAYAR'
+    'SUDAH DIBAYAR' ||
+    bonus.status === 'PAID'
   ) {
     throw new Error(
       'Uang Rajin ini sudah pernah dibayar.'
@@ -348,57 +497,38 @@ export async function bayarUangRajin(
       docId
     );
 
-  await setDoc(
-    docRef,
-    {
-      ...bonus,
-      status:
-        'SUDAH DIBAYAR',
-      paidAt:
-        serverTimestamp(),
-      paidBy:
-        currentUserId,
-      paidByName:
-        currentUserName,
-      paymentDate:
-        tanggalHariIni(),
-      updatedAt:
-        serverTimestamp(),
-    },
-    { merge: true }
-  );
+  const amount = Number(bonus.finalBonus || bonus.bonusAmount || bonus.baseBonus) || 0;
+  const paymentDate = tanggalHariIni();
+  const txDocId = getUangRajinTxDocId(docId);
 
-  const expenseId =
-    await tambahPengeluaran(
-      {
-        date:
-          tanggalHariIni(),
-        amount:
-          bonus.finalBonus,
-        category:
-          'ATTENDANCE_BONUS',
-        scope:
-          'SHARING',
-        employeeId:
-          bonus.employeeId,
-        employeeName:
-          bonus.employeeName,
-        description:
-          `Uang Rajin ${bonus.employeeName} (${bonus.label}) - ${bonus.reason || 'Bonus Kehadiran'}`,
-      },
-      currentUserId,
-      currentUserName
-    );
+  const updatedBonus: AttendanceBonusWeek & { id: string } = {
+    ...bonus,
+    id: docId,
+    status: 'SUDAH DIBAYAR',
+    paidAt: serverTimestamp(),
+    paidBy: currentUserId,
+    paidByName: currentUserName,
+    paymentDate: paymentDate,
+    paymentAccount: paymentAccount || 'BCA',
+    paymentTransactionId: txDocId,
+    syncedTransactionId: txDocId,
+    updatedAt: serverTimestamp(),
+  };
+
+  await setDoc(docRef, updatedBonus, { merge: true });
+
+  // Sinkronisasi otomatis ke Buku Kas & Bank (`transactions`)
+  await syncUangRajinToTransaction(updatedBonus, currentUserId, currentUserName);
 
   await catatAuditLog(
     currentUserId,
     currentUserName,
     'BAYAR_UANG_RAJIN',
     bonus.employeeName,
-    `Dibayar Rp ${bonus.finalBonus.toLocaleString('id-ID')} untuk periode ${bonus.label}`
+    `Dibayar Rp ${amount.toLocaleString('id-ID')} via ${paymentAccount || 'BCA'} untuk periode ${bonus.label}. Tercatat di Transaksi Kas ID: ${txDocId}`
   );
 
-  return expenseId;
+  return txDocId;
 }
 
 /* ============================================================
@@ -1875,6 +2005,8 @@ export interface ManualUangRajinInput {
   month?: string; // YYYY-MM
   amount: number; // Nominal uang rajin
   status: 'BELUM DIBAYAR' | 'SUDAH DIBAYAR';
+  paymentAccount?: string; // e.g. 'BCA', 'Kas Tunai', etc.
+  paymentDate?: string;
   notes?: string;
 }
 
@@ -1891,6 +2023,9 @@ export async function createUangRajinManual(
 
   const amount = Number(input.amount) || 0;
   const isPaid = input.status === 'SUDAH DIBAYAR';
+  const paymentAccount = input.paymentAccount || 'BCA';
+  const paymentDate = isPaid ? (input.paymentDate || tanggalHariIni()) : undefined;
+  const txDocId = getUangRajinTxDocId(docId);
 
   const bonusPayload: AttendanceBonusWeek = {
     id: docId,
@@ -1912,7 +2047,10 @@ export async function createUangRajinManual(
     isFullAttendance: true,
     reason: input.notes || 'Input manual admin',
     status: isPaid ? 'SUDAH DIBAYAR' : 'CALCULATED',
-    paymentDate: isPaid ? tanggalHariIni() : undefined,
+    paymentDate: paymentDate,
+    paymentAccount: isPaid ? paymentAccount : undefined,
+    paymentTransactionId: isPaid ? txDocId : undefined,
+    syncedTransactionId: isPaid ? txDocId : undefined,
     paidAt: isPaid ? serverTimestamp() : null,
     paidBy: isPaid ? currentUserId : null,
     paidByName: isPaid ? currentUserName : null,
@@ -1923,12 +2061,21 @@ export async function createUangRajinManual(
 
   await setDoc(docRef, bonusPayload);
 
+  // Sinkronisasi otomatis ke Buku Kas & Bank jika SUDAH DIBAYAR
+  if (isPaid && amount > 0) {
+    await syncUangRajinToTransaction(
+      { ...bonusPayload, id: docId },
+      currentUserId,
+      currentUserName
+    );
+  }
+
   await catatAuditLog(
     currentUserId,
     currentUserName,
     'UANG_RAJIN_MANUAL_CREATED',
     `${input.employeeName} (${input.periodLabel})`,
-    `Input uang rajin manual: Rp ${amount.toLocaleString('id-ID')} (${input.status})`
+    `Input uang rajin manual: Rp ${amount.toLocaleString('id-ID')} (${input.status})${isPaid ? ` via ${paymentAccount}. Tercatat di Transaksi Kas ID: ${txDocId}` : ''}`
   );
 
   return docId;
@@ -1948,6 +2095,7 @@ export async function updateUangRajinManual(
 
   const existing = snap.data() as AttendanceBonusWeek;
   const amount = input.amount !== undefined ? Number(input.amount) : (existing.finalBonus || existing.bonusAmount || 0);
+  const txDocId = getUangRajinTxDocId(id);
 
   const updates: any = {
     updatedAt: serverTimestamp(),
@@ -1962,23 +2110,44 @@ export async function updateUangRajinManual(
   if (input.month !== undefined) updates.month = input.month;
   if (input.weekStart !== undefined) updates.weekStart = input.weekStart;
   if (input.notes !== undefined) updates.reason = input.notes;
+  if (input.paymentAccount !== undefined) updates.paymentAccount = input.paymentAccount;
 
+  let finalStatus = existing.status;
   if (input.status !== undefined) {
     const isPaid = input.status === 'SUDAH DIBAYAR';
-    updates.status = isPaid ? 'SUDAH DIBAYAR' : 'CALCULATED';
+    finalStatus = isPaid ? 'SUDAH DIBAYAR' : 'CALCULATED';
+    updates.status = finalStatus;
     if (isPaid && existing.status !== 'SUDAH DIBAYAR' && existing.status !== 'PAID') {
-      updates.paymentDate = tanggalHariIni();
+      updates.paymentDate = input.paymentDate || existing.paymentDate || tanggalHariIni();
+      updates.paymentAccount = input.paymentAccount || existing.paymentAccount || 'BCA';
+      updates.paymentTransactionId = txDocId;
+      updates.syncedTransactionId = txDocId;
       updates.paidAt = serverTimestamp();
       updates.paidBy = currentUserId;
       updates.paidByName = currentUserName;
     } else if (!isPaid && (existing.status === 'SUDAH DIBAYAR' || existing.status === 'PAID')) {
+      updates.paymentDate = null;
+      updates.paymentAccount = null;
+      updates.paymentTransactionId = null;
+      updates.syncedTransactionId = null;
       updates.paidAt = null;
       updates.paidBy = null;
       updates.paidByName = null;
     }
+  } else if (existing.status === 'SUDAH DIBAYAR' || existing.status === 'PAID') {
+    if (input.paymentDate !== undefined) updates.paymentDate = input.paymentDate;
+    if (input.paymentAccount !== undefined) updates.paymentAccount = input.paymentAccount;
   }
 
   await updateDoc(docRef, updates);
+
+  // Sinkronisasi otomatis ke Buku Kas & Bank
+  const mergedRecord: AttendanceBonusWeek & { id: string } = {
+    ...existing,
+    ...updates,
+    id,
+  };
+  await syncUangRajinToTransaction(mergedRecord, currentUserId, currentUserName);
 
   await catatAuditLog(
     currentUserId,
@@ -1997,6 +2166,25 @@ export async function deleteUangRajinManual(
 ): Promise<void> {
   const docRef = doc(db, 'attendanceBonuses', id);
   await deleteDoc(docRef);
+
+  // Hapus transaksi kas terkait secara deterministic agar tidak ada transaksi yatim
+  const txId = getUangRajinTxDocId(id);
+  try {
+    const txDocRef = doc(db, 'transactions', txId);
+    const txSnap = await getDoc(txDocRef);
+    if (txSnap.exists()) {
+      await deleteDoc(txDocRef);
+      await catatAuditLog(
+        currentUserId,
+        currentUserName,
+        'UANG_RAJIN_TRANSACTION_CLEANED',
+        `Transaksi Kas ${txId}`,
+        `Transaksi kas otomatis dihapus karena record uang rajin ${record.employeeName} (${record.label}) telah dihapus.`
+      );
+    }
+  } catch (txErr) {
+    console.warn('Gagal menghapus transaksi terkait saat hapus uang rajin:', txErr);
+  }
 
   await catatAuditLog(
     currentUserId,

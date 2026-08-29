@@ -433,13 +433,18 @@ export const SettlementHistoryTable: React.FC<SettlementHistoryTableProps> = ({
 
             {/* 5 Pillars Breakdown */}
             <div className="space-y-2">
-              <h4 className="text-xs font-black uppercase text-zinc-700">
-                Alokasi Bagi Hasil 5 Pilar
-              </h4>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <h4 className="text-xs font-black uppercase text-zinc-700">
+                  Alokasi Bagi Hasil 5 Pilar
+                </h4>
+                <span className="text-[11px] font-semibold text-purple-700">
+                  Dihitung dari Profit Bersih (Net)
+                </span>
+              </div>
               <div className="space-y-1.5 text-xs">
                 <div className="flex justify-between items-center p-2.5 rounded-xl bg-blue-50/70 border border-blue-200">
                   <span className="font-bold text-blue-900">
-                    1. Hak Investor ({selectedSettlement.investorPercentage}%)
+                    1. Hak Investor ({selectedSettlement.investorPercentage}% × Profit Bersih)
                   </span>
                   <span className="font-black text-blue-950">
                     {formatRupiah(selectedSettlement.investorAmount)}
@@ -448,7 +453,7 @@ export const SettlementHistoryTable: React.FC<SettlementHistoryTableProps> = ({
 
                 <div className="flex justify-between items-center p-2.5 rounded-xl bg-purple-50/70 border border-purple-200">
                   <span className="font-bold text-purple-900">
-                    2. Bagian Owner ({selectedSettlement.ownerPercentage}%)
+                    2. Bagian Owner ({selectedSettlement.ownerPercentage}% × Profit Bersih)
                   </span>
                   <span className="font-black text-purple-950">
                     {formatRupiah(selectedSettlement.ownerAmount)}
@@ -458,7 +463,7 @@ export const SettlementHistoryTable: React.FC<SettlementHistoryTableProps> = ({
                 <div className="flex justify-between items-center p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200">
                   <div>
                     <span className="font-bold text-emerald-900 block">
-                      3. Bagian Talent ({selectedSettlement.talentPercentage}%)
+                      3. Bagian Talent ({selectedSettlement.talentPercentage}% × Profit Bersih)
                     </span>
                     <span className="text-[10px] text-emerald-700 font-medium">
                       PIC: {selectedSettlement.talentEmployeeName || '-'}
@@ -472,7 +477,7 @@ export const SettlementHistoryTable: React.FC<SettlementHistoryTableProps> = ({
                 <div className="flex justify-between items-center p-2.5 rounded-xl bg-amber-50/70 border border-amber-200">
                   <div>
                     <span className="font-bold text-amber-900 block">
-                      4. Bagian Editor ({selectedSettlement.editorPercentage}%)
+                      4. Bagian Editor ({selectedSettlement.editorPercentage}% × Profit Bersih)
                     </span>
                     <span className="text-[10px] text-amber-700 font-medium">
                       PIC: {selectedSettlement.editorEmployeeName || '-'}
@@ -485,7 +490,7 @@ export const SettlementHistoryTable: React.FC<SettlementHistoryTableProps> = ({
 
                 <div className="flex justify-between items-center p-2.5 rounded-xl bg-zinc-100 border border-zinc-200">
                   <span className="font-bold text-zinc-800">
-                    5. Budget Perusahaan ({selectedSettlement.companyBudgetPercentage}%)
+                    5. Budget Perusahaan ({selectedSettlement.companyBudgetPercentage}% × Profit Bersih)
                   </span>
                   <span className="font-black text-zinc-950">
                     {formatRupiah(selectedSettlement.companyBudgetAmount)}

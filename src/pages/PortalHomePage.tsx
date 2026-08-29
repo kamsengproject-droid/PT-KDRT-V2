@@ -29,7 +29,9 @@ import {
   CheckCircle2,
   Clock,
   MapPin,
-  Edit3
+  Edit3,
+  ArrowDownToLine,
+  Landmark,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { PtKdrtLogo } from '../components/PtKdrtLogo';
@@ -76,6 +78,15 @@ export const PortalHomePage: React.FC<PortalHomePageProps> = ({ onNavigate }) =>
       allowedRoles: ['OWNER', 'MANAGER'],
     },
     {
+      id: 'keuangan-pt-kdrt',
+      title: 'Keuangan PT KDRT',
+      category: 'REKENING PT',
+      desc: 'Pencatatan mutasi transaksi keuangan rekening resmi PT KDRT secara manual (Uang Masuk, Uang Keluar, Saldo Rekening).',
+      icon: Landmark,
+      color: 'amber',
+      allowedRoles: ['OWNER', 'MANAGER'],
+    },
+    {
       id: 'akun',
       title: 'Akun TikTok & Medsos',
       category: 'PLATFORM',
@@ -112,12 +123,12 @@ export const PortalHomePage: React.FC<PortalHomePageProps> = ({ onNavigate }) =>
       allowedRoles: ['OWNER', 'MANAGER'],
     },
     {
-      id: 'inventory',
-      title: 'Inventaris & Aset Kantor',
-      category: 'OPERASIONAL',
-      desc: 'Pencatatan aset fisik, peralatan live streaming, dan logistik kantor.',
-      icon: Boxes,
-      color: 'slate',
+      id: 'history-penarikan',
+      title: 'History Penarikan',
+      category: 'KEUANGAN',
+      desc: 'Riwayat penarikan dana dari akun TikTok/Medsos ke kas/bank PT KDRT & sinkronisasi Buku Kas.',
+      icon: ArrowDownToLine,
+      color: 'emerald',
       allowedRoles: ['OWNER', 'MANAGER'],
     },
     {

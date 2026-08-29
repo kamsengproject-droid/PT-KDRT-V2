@@ -299,12 +299,31 @@ export async function calculateProfitSharingFromTransactions(
     formulaWarning = `Persentase profit sharing tidak sama dengan 100% (${totalPercentage}%). Owner harus menyesuaikan konfigurasi persentase sebelum settlement dapat disetujui (APPROVED).`;
   }
 
-  // 4. Calculate Nominal Amounts (Rounded Rupiah)
-  const investorAmount = Math.round((totalIncome * investorPercentage) / 100);
-  const ownerAmount = Math.round((totalIncome * ownerPercentage) / 100);
-  const talentAmount = Math.round((totalIncome * talentPercentage) / 100);
-  const editorAmount = Math.round((totalIncome * editorPercentage) / 100);
-  const companyBudgetAmount = Math.round((totalIncome * companyBudgetPercentage) / 100);
+  // 4. Calculate Nominal Amounts from Net Profit / Arus Kas Bersih (NET)
+  // Basis pembagian WAJIB Arus Kas Bersih (Net) = totalIncome - totalExpense (Bukan Uang Masuk langsung, bukan GMV/Estimasi)
+  let investorAmount = Math.round((Number(netProfit) * investorPercentage) / 100);
+  let ownerAmount = Math.round((Number(netProfit) * ownerPercentage) / 100);
+  let talentAmount = Math.round((Number(netProfit) * talentPercentage) / 100);
+  let editorAmount = Math.round((Number(netProfit) * editorPercentage) / 100);
+  let companyBudgetAmount = Math.round((Number(netProfit) * companyBudgetPercentage) / 100);
+
+  // Validasi Total & Penyesuaian Selisih Pembulatan Rupiah secara Deterministic
+  // TOTAL ALOKASI HARUS SAMA PERSIS DENGAN PROFIT BERSIH (NET PROFIT)
+  if (isFormulaValid) {
+    const sumAllocations =
+      investorAmount + ownerAmount + talentAmount + editorAmount + companyBudgetAmount;
+    const diff = Number(netProfit) - sumAllocations;
+
+    if (diff !== 0) {
+      if (companyBudgetPercentage > 0) {
+        companyBudgetAmount += diff;
+      } else if (ownerPercentage > 0) {
+        ownerAmount += diff;
+      } else if (investorPercentage > 0) {
+        investorAmount += diff;
+      }
+    }
+  }
 
   return {
     year,
@@ -431,7 +450,7 @@ export async function saveDraftOrReviewSettlement(
       totalIncome: calculation.totalIncome,
       totalExpense: calculation.totalExpense,
       netProfit: calculation.netProfit,
-      calculationBasis: 'INCOME',
+      calculationBasis: 'NET_PROFIT',
 
       activeTierId: calculation.activeTier.tierId || calculation.activeTier.id,
       activeTierName: calculation.activeTier.name,

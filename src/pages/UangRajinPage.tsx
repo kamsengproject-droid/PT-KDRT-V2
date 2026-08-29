@@ -15,6 +15,9 @@ import {
   DollarSign,
   User,
   Users,
+  RefreshCw,
+  Landmark,
+  ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { subscribeEmployees } from '../services/employeeService';
@@ -23,11 +26,23 @@ import {
   createUangRajinManual,
   updateUangRajinManual,
   deleteUangRajinManual,
+  syncAllUangRajinToTransactions,
   ManualUangRajinInput,
 } from '../services/payrollService';
 import { AttendanceBonusWeek, Employee } from '../types';
-import { formatBulanTahun, formatRupiah, bulanSekarang, tanggalHariIni } from '../utils/formatters';
+import { formatBulanTahun, formatRupiah, bulanSekarang, tanggalHariIni, formatTanggal } from '../utils/formatters';
 import { CurrencyInput } from '../components/CurrencyInput';
+
+const KAS_BANK_ACCOUNTS = [
+  'BCA PT KDRT',
+  'Kas Tunai',
+  'BCA',
+  'Mandiri',
+  'SeaBank',
+  'BRI',
+  'BNI',
+  'BSI',
+];
 
 export const UangRajinPage: React.FC = () => {
   const { userProfile, currentUser, loading } = useAuth();
@@ -51,9 +66,12 @@ export const UangRajinPage: React.FC = () => {
   const [formMonth, setFormMonth] = useState<string>(selectedMonth);
   const [formAmount, setFormAmount] = useState<number>(150000);
   const [formStatus, setFormStatus] = useState<'BELUM DIBAYAR' | 'SUDAH DIBAYAR'>('BELUM DIBAYAR');
+  const [formPaymentAccount, setFormPaymentAccount] = useState<string>('BCA PT KDRT');
+  const [formPaymentDate, setFormPaymentDate] = useState<string>(tanggalHariIni());
   const [formNotes, setFormNotes] = useState<string>('');
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isSyncingKas, setIsSyncingKas] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Subscribe to employees and attendance bonuses
@@ -87,6 +105,8 @@ export const UangRajinPage: React.FC = () => {
     setFormMonth(selectedMonth);
     setFormAmount(150000);
     setFormStatus('BELUM DIBAYAR');
+    setFormPaymentAccount('BCA PT KDRT');
+    setFormPaymentDate(tanggalHariIni());
     setFormNotes('');
     setIsFormOpen(true);
   };
@@ -101,6 +121,8 @@ export const UangRajinPage: React.FC = () => {
     setFormAmount(Number(record.finalBonus || record.bonusAmount || record.baseBonus) || 0);
     const isPaid = record.status === 'SUDAH DIBAYAR' || record.status === 'PAID';
     setFormStatus(isPaid ? 'SUDAH DIBAYAR' : 'BELUM DIBAYAR');
+    setFormPaymentAccount(record.paymentAccount || 'BCA');
+    setFormPaymentDate(record.paymentDate || tanggalHariIni());
     setFormNotes(record.reason || '');
     setIsFormOpen(true);
   };
@@ -127,6 +149,8 @@ export const UangRajinPage: React.FC = () => {
       month: formMonth || selectedMonth,
       amount: Number(formAmount) || 0,
       status: formStatus,
+      paymentAccount: formPaymentAccount,
+      paymentDate: formPaymentDate,
       notes: formNotes.trim(),
     };
 
@@ -140,7 +164,7 @@ export const UangRajinPage: React.FC = () => {
         );
         setFeedback({
           type: 'success',
-          message: `Uang rajin ${payload.employeeName} berhasil diperbarui.`,
+          message: `Uang rajin ${payload.employeeName} berhasil diperbarui${payload.status === 'SUDAH DIBAYAR' ? ' dan otomatis tersinkron ke Buku Kas & Bank (Uang Keluar).' : '.'}`,
         });
       } else {
         await createUangRajinManual(
@@ -150,7 +174,7 @@ export const UangRajinPage: React.FC = () => {
         );
         setFeedback({
           type: 'success',
-          message: `Uang rajin baru untuk ${payload.employeeName} berhasil ditambahkan.`,
+          message: `Uang rajin baru untuk ${payload.employeeName} berhasil ditambahkan${payload.status === 'SUDAH DIBAYAR' ? ' dan otomatis tercatat di Buku Kas & Bank (Uang Keluar).' : '.'}`,
         });
       }
       setIsFormOpen(false);
@@ -176,7 +200,7 @@ export const UangRajinPage: React.FC = () => {
       );
       setFeedback({
         type: 'success',
-        message: `Data uang rajin ${deleteConfirmRecord.employeeName} (${deleteConfirmRecord.label}) berhasil dihapus.`,
+        message: `Data uang rajin ${deleteConfirmRecord.employeeName} (${deleteConfirmRecord.label}) berhasil dihapus dan transaksi kas terkait telah dibersihkan.`,
       });
       setDeleteConfirmRecord(null);
     } catch (err: any) {
@@ -196,19 +220,48 @@ export const UangRajinPage: React.FC = () => {
     try {
       await updateUangRajinManual(
         record.id,
-        { status: nextStatus },
+        {
+          status: nextStatus,
+          paymentAccount: record.paymentAccount || 'BCA',
+          paymentDate: tanggalHariIni(),
+        },
         userProfile?.uid || currentUser?.uid || 'owner',
         userProfile?.name || 'Owner PT.KDRT'
       );
       setFeedback({
         type: 'success',
-        message: `Status uang rajin ${record.employeeName} diubah menjadi: ${nextStatus}.`,
+        message:
+          nextStatus === 'SUDAH DIBAYAR'
+            ? `Status uang rajin ${record.employeeName} diubah ke SUDAH DIBAYAR & otomatis tercatat sebagai Uang Keluar di Buku Kas & Bank.`
+            : `Status uang rajin ${record.employeeName} diubah ke BELUM DIBAYAR & transaksi terkait telah dihapus dari Buku Kas & Bank.`,
       });
     } catch (err: any) {
       setFeedback({
         type: 'error',
         message: err.message || 'Gagal memperbarui status pembayaran.',
       });
+    }
+  };
+
+  const handleSyncAllKas = async () => {
+    setIsSyncingKas(true);
+    setFeedback(null);
+    try {
+      const res = await syncAllUangRajinToTransactions(
+        userProfile?.uid || currentUser?.uid || 'owner',
+        userProfile?.name || 'Owner PT.KDRT'
+      );
+      setFeedback({
+        type: 'success',
+        message: `Sinkronisasi Buku Kas Selesai: ${res.syncedCount} transaksi SUDAH DIBAYAR dipastikan tercatat sebagai Uang Keluar, dan ${res.removedCount} data BELUM DIBAYAR bersih dari Buku Kas. Tidak ada duplikasi!`,
+      });
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: err.message || 'Gagal melakukan sinkronisasi massal ke Buku Kas & Bank.',
+      });
+    } finally {
+      setIsSyncingKas(false);
     }
   };
 
@@ -328,6 +381,18 @@ export const UangRajinPage: React.FC = () => {
               title="Filter Periode Bulan"
             />
           </div>
+
+          {/* Sync All Button */}
+          <button
+            id="btn-sync-kas-uang-rajin"
+            onClick={handleSyncAllKas}
+            disabled={isSyncingKas}
+            title="Sinkronisasi seluruh data Uang Rajin berstatus SUDAH DIBAYAR ke Buku Kas & Bank"
+            className="flex items-center gap-2 bg-[#111726] hover:bg-[#161f33] text-cyan-300 border border-cyan-500/30 hover:border-cyan-500/60 font-semibold px-3.5 py-2 rounded-xl text-xs transition cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isSyncingKas ? 'animate-spin text-[#00E5FF]' : ''}`} />
+            <span>{isSyncingKas ? 'Menyinkronkan...' : 'Sinkronkan Buku Kas'}</span>
+          </button>
 
           {/* Tambah Uang Rajin Button */}
           <button
@@ -519,6 +584,7 @@ export const UangRajinPage: React.FC = () => {
                 <th className="py-3.5 px-4">Minggu / Periode</th>
                 <th className="py-3.5 px-4 text-right">Nominal Uang Rajin</th>
                 <th className="py-3.5 px-4 text-center">Status Pembayaran</th>
+                <th className="py-3.5 px-4">Integrasi Buku Kas</th>
                 <th className="py-3.5 px-4">Catatan</th>
                 <th className="py-3.5 px-4 text-center">Aksi</th>
               </tr>
@@ -526,7 +592,7 @@ export const UangRajinPage: React.FC = () => {
             <tbody className="divide-y divide-[#1E2637]/70">
               {filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-500">
+                  <td colSpan={7} className="py-12 text-center text-slate-500">
                     <div className="max-w-xs mx-auto space-y-2">
                       <Award className="h-10 w-10 text-slate-600 mx-auto" />
                       <p className="font-medium text-slate-400">Belum ada data uang rajin mingguan</p>
@@ -540,6 +606,7 @@ export const UangRajinPage: React.FC = () => {
                 filteredRecords.map((rec) => {
                   const isPaid = rec.status === 'SUDAH DIBAYAR' || rec.status === 'PAID';
                   const amount = Number(rec.finalBonus || rec.bonusAmount || rec.baseBonus) || 0;
+                  const paymentAcc = rec.paymentAccount || 'BCA';
 
                   return (
                     <tr
@@ -591,6 +658,25 @@ export const UangRajinPage: React.FC = () => {
                             </>
                           )}
                         </button>
+                      </td>
+
+                      {/* Integrasi Buku Kas */}
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        {isPaid ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                              Uang Keluar ({paymentAcc})
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {rec.paymentDate ? formatTanggal(rec.paymentDate) : 'Tercatat di Kas'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-500 italic">
+                            Belum masuk Kas
+                          </span>
+                        )}
                       </td>
 
                       {/* Catatan */}
@@ -763,6 +849,51 @@ export const UangRajinPage: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {/* Akun Kas & Bank & Tanggal Bayar (Tampil saat SUDAH DIBAYAR) */}
+              {formStatus === 'SUDAH DIBAYAR' && (
+                <div className="p-3.5 bg-[#0B0F19] rounded-xl border border-emerald-500/30 space-y-3 animate-in fade-in">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+                    <Landmark className="h-4 w-4" />
+                    <span>Integrasi Buku Kas & Bank (Otomatis Uang Keluar)</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-300 font-medium mb-1">
+                        Sumber Akun Kas / Bank
+                      </label>
+                      <select
+                        value={formPaymentAccount}
+                        onChange={(e) => setFormPaymentAccount(e.target.value)}
+                        className="w-full bg-[#111726] border border-[#1E2637] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#00E5FF]"
+                      >
+                        {KAS_BANK_ACCOUNTS.map((acc) => (
+                          <option key={acc} value={acc}>
+                            {acc}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-medium mb-1">
+                        Tanggal Bayar
+                      </label>
+                      <input
+                        type="date"
+                        value={formPaymentDate}
+                        onChange={(e) => setFormPaymentDate(e.target.value)}
+                        className="w-full bg-[#111726] border border-[#1E2637] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#00E5FF]"
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-400">
+                    💡 Nominal <strong className="text-emerald-400">{formatRupiah(formAmount)}</strong> akan otomatis tercatat sebagai <strong>Uang Keluar</strong> di Buku Kas & Bank pada akun <strong className="text-white">{formPaymentAccount}</strong> tanpa duplikasi.
+                  </p>
+                </div>
+              )}
 
               {/* Catatan */}
               <div>

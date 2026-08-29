@@ -330,7 +330,7 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             Perhitungan Bagi Hasil Kategori Sharing
           </h2>
           <p className="text-xs text-zinc-500 max-w-2xl leading-relaxed">
-            Dihitung otomatis berdasarkan <strong>Uang Masuk Sharing Nyata</strong> (bukan GMV/estimasi) dari Buku Kas Master Transaksi. Hak investor dicatat sebagai <em>Kewajiban (Accrued)</em> dan hanya menjadi pengeluaran kas ketika dibayarkan.
+            Dihitung otomatis dari <strong>Arus Kas Bersih (Net)</strong> = Uang Masuk Sharing Nyata dikurangi Pengeluaran Sharing (bukan dari GMV / estimasi komisi). Hak investor dicatat sebagai <em>Kewajiban (Accrued)</em> dan baru menjadi pengeluaran kas ketika dibayarkan.
           </p>
         </div>
 
@@ -465,7 +465,7 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
               {formatRupiah(calcResult.totalIncome)}
             </div>
             <div className="text-[11px] font-medium text-emerald-700 mt-1">
-              Dasar Perhitungan Bagi Hasil (Kas Riil)
+              Pemasukan Kas Riil Kategori Sharing
             </div>
           </div>
 
@@ -484,22 +484,25 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             </div>
           </div>
 
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xs">
-            <div className="flex items-center justify-between text-zinc-600">
-              <span className="text-[11px] font-black uppercase tracking-wider">
+          <div className="rounded-2xl border-2 border-purple-400 bg-purple-50/70 p-5 shadow-2xs ring-2 ring-purple-400/20">
+            <div className="flex items-center justify-between text-purple-900">
+              <span className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-purple-600" />
                 ARUS KAS BERSIH (NET)
               </span>
-              <Sparkles className="h-4 w-4 text-purple-600" />
+              <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-purple-200 text-purple-900 uppercase">
+                Dasar Pembagian
+              </span>
             </div>
             <div
               className={`text-2xl font-black mt-2 ${
-                calcResult.netProfit >= 0 ? 'text-zinc-900' : 'text-rose-600'
+                calcResult.netProfit >= 0 ? 'text-purple-950' : 'text-rose-600'
               }`}
             >
               {formatRupiah(calcResult.netProfit)}
             </div>
-            <div className="text-[11px] font-medium text-zinc-400 mt-1">
-              Saldo Mutasi Kas Periode Ini
+            <div className="text-[11px] font-bold text-purple-700 mt-1">
+              Dasar Utama Pembagian Bagi Hasil (Net Profit)
             </div>
           </div>
         </div>
@@ -508,15 +511,20 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
       {/* 4. Five Pillars Distribution Breakdown */}
       {calcResult && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-black uppercase tracking-wider text-zinc-800 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-purple-600" />
-              Rincian Alokasi Nominal Bagi Hasil (5 Pilar)
-            </h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-black uppercase tracking-wider text-zinc-800 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-purple-600" />
+                RINCIAN ALOKASI NOMINAL BAGI HASIL (5 PILAR)
+              </h3>
+              <p className="text-xs font-semibold text-purple-700 mt-0.5">
+                Pembagian dihitung dari Profit Bersih / Arus Kas Bersih (Net)
+              </p>
+            </div>
             {isOwner && !isLocked && (
               <button
                 onClick={handleResetPercentages}
-                className="text-xs text-purple-600 hover:text-purple-700 font-bold underline"
+                className="text-xs text-purple-600 hover:text-purple-700 font-bold underline shrink-0"
               >
                 Reset ke Persentase Tier Default
               </button>
@@ -527,10 +535,10 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             {/* Pilar 1: INVESTOR (45%) */}
             <div className="rounded-2xl border border-blue-200 bg-linear-to-b from-blue-50/60 to-white p-4 shadow-2xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-xs font-black text-blue-900 uppercase">1. Hak Investor</span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-100 text-blue-800">
-                    {calcResult.investorPercentage}%
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-100 text-blue-800 shrink-0">
+                    {calcResult.investorPercentage}% × Profit Bersih
                   </span>
                 </div>
                 <div className="text-xl font-black text-blue-950 mt-3">
@@ -565,10 +573,10 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             {/* Pilar 2: OWNER (45%) */}
             <div className="rounded-2xl border border-purple-200 bg-linear-to-b from-purple-50/60 to-white p-4 shadow-2xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-xs font-black text-purple-900 uppercase">2. Bagian Owner</span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-100 text-purple-800">
-                    {calcResult.ownerPercentage}%
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-100 text-purple-800 shrink-0">
+                    {calcResult.ownerPercentage}% × Profit Bersih
                   </span>
                 </div>
                 <div className="text-xl font-black text-purple-950 mt-3">
@@ -603,10 +611,10 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             {/* Pilar 3: TALENT (5% / 7% / 10%) */}
             <div className="rounded-2xl border border-emerald-200 bg-linear-to-b from-emerald-50/60 to-white p-4 shadow-2xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-xs font-black text-emerald-900 uppercase">3. Bagian Talent</span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-800">
-                    {calcResult.talentPercentage}%
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-800 shrink-0">
+                    {calcResult.talentPercentage}% × Profit Bersih
                   </span>
                 </div>
                 <div className="text-xl font-black text-emerald-950 mt-3">
@@ -663,10 +671,10 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             {/* Pilar 4: EDITOR (5% / 7% / 10%) */}
             <div className="rounded-2xl border border-amber-200 bg-linear-to-b from-amber-50/60 to-white p-4 shadow-2xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-xs font-black text-amber-900 uppercase">4. Bagian Editor</span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-800">
-                    {calcResult.editorPercentage}%
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-800 shrink-0">
+                    {calcResult.editorPercentage}% × Profit Bersih
                   </span>
                 </div>
                 <div className="text-xl font-black text-amber-950 mt-3">
@@ -723,10 +731,10 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
             {/* Pilar 5: BUDGET PERUSAHAAN (10% / 0%) */}
             <div className="rounded-2xl border border-zinc-300 bg-linear-to-b from-zinc-100 to-white p-4 shadow-2xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-xs font-black text-zinc-900 uppercase">5. Budget PT.KDRT</span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-zinc-200 text-zinc-800">
-                    {calcResult.companyBudgetPercentage}%
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-zinc-200 text-zinc-800 shrink-0">
+                    {calcResult.companyBudgetPercentage}% × Profit Bersih
                   </span>
                 </div>
                 <div className="text-xl font-black text-zinc-950 mt-3">
@@ -755,6 +763,45 @@ export const ProfitSharingCalculator: React.FC<ProfitSharingCalculatorProps> = (
                     className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs font-bold text-zinc-800"
                   />
                 </div>
+              )}
+            </div>
+          </div>
+
+          {/* Validation & Total Balance Bar */}
+          <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-bold text-zinc-600">Total Alokasi 5 Pilar:</span>
+              <span className="font-black text-zinc-900 text-sm">
+                {formatRupiah(
+                  calcResult.investorAmount +
+                    calcResult.ownerAmount +
+                    calcResult.talentAmount +
+                    calcResult.editorAmount +
+                    calcResult.companyBudgetAmount
+                )}
+              </span>
+              <span className="text-zinc-400 font-medium">
+                (dari Profit Bersih: {formatRupiah(calcResult.netProfit)})
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {calcResult.isFormulaValid &&
+              calcResult.investorAmount +
+                calcResult.ownerAmount +
+                calcResult.talentAmount +
+                calcResult.editorAmount +
+                calcResult.companyBudgetAmount ===
+                calcResult.netProfit ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-black text-emerald-700 bg-emerald-100/80 px-2.5 py-1 rounded-full border border-emerald-200">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                  Total Alokasi Tepat = Profit Bersih (100%)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-black text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full border border-amber-200">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                  Formula: {calcResult.totalPercentage}%
+                </span>
               )}
             </div>
           </div>

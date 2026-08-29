@@ -131,6 +131,17 @@ service cloud.firestore {
     // ---------------------------------------------------------------
     // 4. KEUANGAN
     // ---------------------------------------------------------------
+    // Keuangan PT KDRT (Database & Collection Terpisah - Manual Rekening PT KDRT)
+    match /ptKdrtTransactions/{transactionId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+
+    match /companySettings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
     match /transactions/{transactionId} {
       allow read: if isManager() || (
         isInvestor() && resource.data.scope == 'SHARING'

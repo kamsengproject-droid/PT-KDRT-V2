@@ -392,6 +392,41 @@ export async function deleteTransaction(
       }
     }
 
+    // Revert linked attendance bonus status if deleting an attendance bonus transaction
+    const isUangRajinTx =
+      currentTransaction.sourceType === 'ATTENDANCE_BONUS' ||
+      transactionId.startsWith('UANG_RAJIN_') ||
+      transactionId.startsWith('ATTENDANCE_BONUS_');
+
+    if (isUangRajinTx) {
+      const bonusDocId =
+        currentTransaction.referenceId ||
+        (transactionId.startsWith('UANG_RAJIN_') ? transactionId.replace('UANG_RAJIN_', '') : null) ||
+        (transactionId.startsWith('ATTENDANCE_BONUS_') ? transactionId.replace('ATTENDANCE_BONUS_', '') : null);
+
+      if (bonusDocId) {
+        try {
+          const bonusRef = doc(db, 'attendanceBonuses', bonusDocId);
+          const bonusSnap = await getDoc(bonusRef);
+          if (bonusSnap.exists()) {
+            await updateDoc(bonusRef, {
+              status: 'CALCULATED',
+              paymentDate: null,
+              paymentAccount: null,
+              paymentTransactionId: null,
+              syncedTransactionId: null,
+              paidAt: null,
+              paidBy: null,
+              paidByName: null,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch (bonusErr) {
+          console.warn('Gagal reset status uang rajin terkait transaksi yang dihapus:', bonusErr);
+        }
+      }
+    }
+
     await catatAuditLog(
       currentUserId,
       currentUserName,

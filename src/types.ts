@@ -141,6 +141,7 @@ export type TransactionSourceType =
   | 'DAILY_EXPENSE'
   | 'COMMISSION_REAL'
   | 'FUND_TRANSFER'
+  | 'WITHDRAWAL'
   | 'OTHER'
   | 'OPENING_BALANCE';
 
@@ -239,6 +240,39 @@ export interface FinancialTransaction {
 
 // Backward compatibility alias
 export type Transaction = FinancialTransaction;
+
+export interface SaldoRealPtKdrt {
+  amount: number;
+  notes?: string;
+  updatedAt?: any;
+  updatedBy?: string;
+  updatedByName?: string;
+}
+
+export type MedsosWithdrawalStatus = 'BERHASIL' | 'DIPROSES' | 'GAGAL' | 'DIBATALKAN';
+
+export interface WithdrawalRecord {
+  id?: string;
+  date: string; // YYYY-MM-DD (Tanggal Penarikan)
+  accountId: string; // Akun TikTok / Medsos ID
+  accountName: string; // e.g. "NISAGROSIR88", "KDRT OFFICIAL", dll
+  amount: number; // Nominal Penarikan (Number(...) || 0)
+  destinationAccount: string; // Tujuan Dana: BCA, Mandiri, Kas Tunai, dll
+  status: MedsosWithdrawalStatus; // 'BERHASIL' | 'DIPROSES' | 'GAGAL' | 'DIBATALKAN'
+  referenceNumber?: string; // Nomor Referensi / ID Penarikan (opsional)
+  notes?: string; // Catatan (opsional)
+
+  // Sync reference to Buku Kas & Bank
+  syncedTransactionId?: string; // e.g. "WITHDRAWAL_{id}"
+
+  // Timestamps & Audit
+  createdAt?: any;
+  createdBy?: string;
+  createdByName?: string;
+  updatedAt?: any;
+  updatedBy?: string;
+  updatedByName?: string;
+}
 
 export interface FinancialReconciliation {
   id?: string;
@@ -464,6 +498,9 @@ export interface AttendanceBonusWeek {
   paidBy?: string;
   paidByName?: string;
   paymentDate?: string;
+  paymentAccount?: string;
+  paymentTransactionId?: string;
+  syncedTransactionId?: string;
   breakdown: AttendanceBonusDayBreakdown[];
   createdAt?: any;
   updatedAt?: any;
@@ -971,7 +1008,7 @@ export interface ProfitSharingSettlement {
   totalIncome: number; // Sum of active type='INCOME' & scope='SHARING'
   totalExpense: number; // Sum of active type='EXPENSE' & scope='SHARING'
   netProfit: number; // totalIncome - totalExpense (Cashflow net)
-  calculationBasis: 'INCOME'; // "Profit sharing dihitung berdasarkan Uang Masuk Sharing Tercatat"
+  calculationBasis?: 'NET_PROFIT' | 'INCOME' | string; // "Profit sharing dihitung dari Arus Kas Bersih (Net)"
 
   // 2. Tier & Formula Persentase
   activeTierId?: string;
@@ -1363,3 +1400,61 @@ export interface EmployeeCommission {
   updatedBy?: string;
   updatedByName?: string;
 }
+
+// ============================================================================
+// KEUANGAN REKENING PT KDRT (TERPISAH & MANUAL REKENING RESMI PT KDRT)
+// ============================================================================
+
+export type PtKdrtTransactionType = 'INCOME' | 'EXPENSE';
+
+export interface PtKdrtTransaction {
+  id?: string;
+  type: PtKdrtTransactionType; // 'INCOME' = Uang Masuk, 'EXPENSE' = Uang Keluar
+  date: string; // YYYY-MM-DD
+  amount: number; // Nominal Rupiah
+  category: string; // Kategori transaksi
+  accountName: string; // Nama Rekening, default "BCA PT KDRT"
+  description: string; // Deskripsi / Keterangan Transaksi
+  notes?: string; // Catatan Tambahan
+  referenceNumber?: string; // No. Referensi / No. Bukti Transfer
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: any;
+  updatedAt?: any;
+  updatedBy?: string;
+  updatedByName?: string;
+}
+
+export const PT_KDRT_INCOME_CATEGORIES = [
+  'Omset Penjualan / Afiliasi',
+  'Transfer Masuk Rekening',
+  'Suntikan Modal / Investor',
+  'Pelunasan / Piutang',
+  'Bunga Bank / Pendapatan Finansial',
+  'Pengembalian Dana (Refund)',
+  'Pendapatan Lain-lain',
+] as const;
+
+export const PT_KDRT_EXPENSE_CATEGORIES = [
+  'Biaya Operasional PT KDRT',
+  'Gaji & Upah Karyawan',
+  'Uang Rajin & Bonus',
+  'Sewa Tempat & Kantor',
+  'Listrik, Internet & Utilitas',
+  'Iklan, Ads & Marketing',
+  'Pembelian Alat / Inventaris PT',
+  'Biaya Admin Bank & Pajak',
+  'Penarikan Dana Owner / Prive',
+  'Bagi Hasil / Profit Sharing',
+  'Pengeluaran Lain-lain',
+] as const;
+
+export const PT_KDRT_DEFAULT_ACCOUNTS = [
+  'BCA PT KDRT',
+  'Mandiri PT KDRT',
+  'Kas Tunai PT KDRT',
+  'BRI PT KDRT',
+  'BNI PT KDRT',
+  'SeaBank PT KDRT',
+] as const;
+

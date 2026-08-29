@@ -135,6 +135,21 @@ export async function checkDuplicatePerformance(
    3B. SINKRONISASI SINGLE KOMISI REAL KE TRANSAKSI BUKU KAS & BANK
    ============================================================ */
 
+export interface SingleSyncResult {
+  action: 'CREATED' | 'UPDATED' | 'UNCHANGED' | 'DELETED' | 'NONE';
+  txId: string | null;
+}
+
+export interface KomisiSyncSummary {
+  totalChecked: number;
+  totalNew: number;
+  totalUpdated: number;
+  totalAlreadySynced: number;
+  totalSynced: number;
+  totalDuplicates: number;
+  details: string[];
+}
+
 export async function syncKomisiRealToTransaction(
   perfDoc: {
     id: string;
@@ -149,7 +164,7 @@ export async function syncKomisiRealToTransaction(
   },
   currentUserId: string = 'system',
   currentUserName: string = 'Sistem Auto-Sync'
-): Promise<string | null> {
+): Promise<SingleSyncResult> {
   try {
     const commValue = Number(perfDoc.commissionReal ?? perfDoc.realCommission) || 0;
     const txId = getTransactionDocId(perfDoc.id);
@@ -160,8 +175,9 @@ export async function syncKomisiRealToTransaction(
       const existingSnap = await getDoc(txRef);
       if (existingSnap.exists()) {
         await deleteDoc(txRef);
+        return { action: 'DELETED', txId: null };
       }
-      return null;
+      return { action: 'NONE', txId: null };
     }
 
     const existingSnap = await getDoc(txRef);
@@ -197,10 +213,25 @@ export async function syncKomisiRealToTransaction(
       txPayload.createdAt = serverTimestamp();
       txPayload.createdBy = currentUserId;
       txPayload.createdByName = currentUserName;
+      await setDoc(txRef, txPayload);
+      return { action: 'CREATED', txId };
+    }
+
+    // Check if anything actually changed
+    const currentAmount = Number(existingTx.amount) || 0;
+    const currentDate = existingTx.date;
+    const currentStatus = existingTx.status || 'ACTIVE';
+
+    if (
+      currentAmount === commValue &&
+      currentDate === perfDoc.date &&
+      currentStatus === 'ACTIVE'
+    ) {
+      return { action: 'UNCHANGED', txId };
     }
 
     await setDoc(txRef, txPayload, { merge: true });
-    return txId;
+    return { action: 'UPDATED', txId };
   } catch (error) {
     console.error('Gagal sinkronisasi Komisi Real ke Transaksi:', error);
     throw error;
@@ -219,13 +250,15 @@ export async function syncKomisiRealToTransaction(
 export async function syncAllKomisiRealToTransactions(
   currentUserId: string = 'system',
   currentUserName: string = 'Sistem Auto-Sync'
-): Promise<{ totalChecked: number; totalSynced: number; details: string[] }> {
+): Promise<KomisiSyncSummary> {
   try {
     const perfCol = collection(db, 'dailyPerformance');
     const perfSnap = await getDocs(perfCol);
 
     let totalChecked = 0;
-    let totalSynced = 0;
+    let totalNew = 0;
+    let totalUpdated = 0;
+    let totalAlreadySynced = 0;
     const details: string[] = [];
 
     for (const docSnap of perfSnap.docs) {
@@ -234,7 +267,7 @@ export async function syncAllKomisiRealToTransactions(
       totalChecked++;
 
       if (comm > 0) {
-        const txId = await syncKomisiRealToTransaction(
+        const result = await syncKomisiRealToTransaction(
           {
             id: docSnap.id,
             date: pData.date,
@@ -250,16 +283,29 @@ export async function syncAllKomisiRealToTransactions(
           currentUserName
         );
 
-        if (txId) {
-          totalSynced++;
-          details.push(
-            `${pData.accountName || pData.accountId} (${pData.date}) -> Rp ${comm.toLocaleString('id-ID')}`
-          );
+        if (result.action === 'CREATED') {
+          totalNew++;
+          details.push(`[BARU] ${pData.accountName || pData.accountId} (${pData.date}) -> Rp ${comm.toLocaleString('id-ID')}`);
+        } else if (result.action === 'UPDATED') {
+          totalUpdated++;
+          details.push(`[UPDATE] ${pData.accountName || pData.accountId} (${pData.date}) -> Rp ${comm.toLocaleString('id-ID')}`);
+        } else if (result.action === 'UNCHANGED') {
+          totalAlreadySynced++;
         }
       }
     }
 
-    return { totalChecked, totalSynced, details };
+    const totalSynced = totalNew + totalUpdated + totalAlreadySynced;
+
+    return {
+      totalChecked,
+      totalNew,
+      totalUpdated,
+      totalAlreadySynced,
+      totalSynced,
+      totalDuplicates: 0,
+      details,
+    };
   } catch (error) {
     console.error('Error saat rekonsiliasi Komisi Real ke Buku Kas & Bank:', error);
     throw error;

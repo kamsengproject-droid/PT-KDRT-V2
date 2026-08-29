@@ -11,7 +11,7 @@ import {
   orderBy,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { Holiday, OfficeLocation, WorkplaceSchedule } from '../types';
+import { Holiday, OfficeLocation, WorkplaceSchedule, SaldoRealPtKdrt } from '../types';
 import { DEFAULT_SCHEDULE } from '../utils/attendanceCalc';
 import { catatAuditLog } from './auditService';
 
@@ -218,3 +218,69 @@ export async function hapusHariLibur(
     handleFirestoreError(error, OperationType.DELETE, `holidays/${id}`);
   }
 }
+
+// ============================================================
+// SALDO REAL PT KDRT (MANUAL INPUT OWNER)
+// ============================================================
+
+/**
+ * Subscribe data Saldo Real PT KDRT (Input Manual Owner).
+ * Disimpan di collection `companySettings`, doc `saldoRealPtKdrt`.
+ * Nilai ini bersifat independen dan TIDAK dihitung dari transactions.
+ */
+export function subscribeSaldoRealPtKdrt(callback: (data: SaldoRealPtKdrt | null) => void) {
+  const ref = doc(db, 'companySettings', 'saldoRealPtKdrt');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        callback(snap.data() as SaldoRealPtKdrt);
+      } else {
+        callback(null);
+      }
+    },
+    (err) => {
+      console.warn('Gagal membaca Saldo Real PT KDRT:', err);
+      callback(null);
+    }
+  );
+}
+
+/**
+ * Update Saldo Real PT KDRT oleh Owner secara manual.
+ */
+export async function updateSaldoRealPtKdrt(
+  amount: number,
+  notes: string = '',
+  userId: string,
+  userName: string
+) {
+  try {
+    const ref = doc(db, 'companySettings', 'saldoRealPtKdrt');
+    const prevSnap = await getDoc(ref);
+    const before = prevSnap.exists() ? (prevSnap.data() as SaldoRealPtKdrt) : null;
+
+    const payload: SaldoRealPtKdrt = {
+      amount: Number(amount) || 0,
+      notes: notes.trim(),
+      updatedAt: serverTimestamp(),
+      updatedBy: userId,
+      updatedByName: userName,
+    };
+
+    await setDoc(ref, payload, { merge: true });
+
+    await catatAuditLog(
+      userId,
+      userName,
+      'EDIT_SALDO_REAL_PT_KDRT',
+      'Saldo Real PT KDRT',
+      `Saldo diupdate dari Rp ${(before?.amount || 0).toLocaleString('id-ID')} menjadi Rp ${(Number(amount) || 0).toLocaleString('id-ID')}. Catatan: ${notes || '-'}`,
+      before,
+      payload
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'companySettings/saldoRealPtKdrt');
+  }
+}
+

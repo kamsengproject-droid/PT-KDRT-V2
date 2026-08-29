@@ -21,6 +21,8 @@ import {
   KeyRound,
   UserCircle2,
   Award,
+  ArrowDownToLine,
+  Landmark,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { ChangePasswordModal } from './ChangePasswordModal';
@@ -116,12 +118,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             section: 'Bisnis & Keuangan',
             items: [
               { id: 'keuangan', label: 'Buku Kas & Bank', icon: Wallet },
+              { id: 'keuangan-pt-kdrt', label: 'Keuangan PT KDRT', icon: Landmark },
               { id: 'akun', label: 'Akun TikTok & Medsos', icon: Smartphone },
               // Single entry — Data GMV & Komisi Real live as tabs inside this page
               { id: 'performa-harian', label: 'Data Omset', icon: TrendingUp },
               { id: 'database-sampel', label: 'Produk Sampel', icon: Package },
               { id: 'penataan-lokasi', label: 'Penataan Lokasi', icon: MapPin },
-              { id: 'inventory', label: 'Inventaris & Aset', icon: Boxes },
+              { id: 'history-penarikan', label: 'History Penarikan', icon: ArrowDownToLine },
             ],
           },
           {

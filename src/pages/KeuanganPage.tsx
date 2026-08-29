@@ -22,6 +22,9 @@ import {
   RefreshCw,
   Home,
   SlidersHorizontal,
+  Check,
+  Info,
+  Lock,
 } from 'lucide-react';
 import {
   collection,
@@ -35,7 +38,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
-import { FinancialTransaction, TransactionType } from '../types';
+import { FinancialTransaction, TransactionType, SaldoRealPtKdrt } from '../types';
 import {
   formatRupiah,
   formatTanggal,
@@ -45,7 +48,17 @@ import {
 } from '../utils/formatters';
 import { CurrencyInput } from '../components/CurrencyInput';
 import { catatAuditLog } from '../services/auditService';
-import { syncAllKomisiRealToTransactions } from '../services/performanceService';
+import {
+  syncAllKomisiRealToTransactions,
+  KomisiSyncSummary,
+} from '../services/performanceService';
+import {
+  syncAllUangRajinToTransactions,
+} from '../services/payrollService';
+import {
+  subscribeSaldoRealPtKdrt,
+  updateSaldoRealPtKdrt,
+} from '../services/settingsService';
 
 interface KeuanganPageProps {
   onBackToPortal?: () => void;
@@ -65,6 +78,7 @@ const PRESET_ACCOUNTS = [
 
 // Preset Kategori Uang Masuk
 const PRESET_INCOME_CATEGORIES = [
+  'Penarikan TikTok/Medsos',
   'Komisi TikTok',
   'Endorse & Sponsorship',
   'Penjualan & Jasa',
@@ -98,13 +112,24 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
   const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 1B. Saldo Real PT KDRT (Input Manual Owner) State
+  const [saldoRealData, setSaldoRealData] = useState<SaldoRealPtKdrt | null>(null);
+  const [isEditSaldoRealModalOpen, setIsEditSaldoRealModalOpen] = useState(false);
+  const [saldoRealAmountInput, setSaldoRealAmountInput] = useState<number | ''>('');
+  const [saldoRealNotesInput, setSaldoRealNotesInput] = useState<string>('');
+  const [saldoRealSaving, setSaldoRealSaving] = useState(false);
+
+  // 1C. Sync Summary Modal State
+  const [syncSummary, setSyncSummary] = useState<KomisiSyncSummary | null>(null);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
   // 2. Filter States
   const [selectedMonth, setSelectedMonth] = useState<string>(bulanHariIni());
   const [filterAccount, setFilterAccount] = useState<string>('ALL');
   const [filterType, setFilterType] = useState<'ALL' | 'INCOME' | 'EXPENSE'>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // 3. Modal Form State (Tambah & Edit)
+  // 3. Modal Form State (Tambah & Edit Transaksi)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -138,32 +163,122 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
     }, 4000);
   };
 
-  // Auto-sync / Backfill historical Komisi Real to transactions on mount
+  // Helper format timestamp WIB
+  const formatTimestampWIB = (ts: any): string => {
+    if (!ts) return '-';
+    try {
+      let d: Date;
+      if (ts.toDate && typeof ts.toDate === 'function') {
+        d = ts.toDate();
+      } else if (ts.seconds) {
+        d = new Date(ts.seconds * 1000);
+      } else if (typeof ts === 'string' || typeof ts === 'number') {
+        d = new Date(ts);
+      } else if (ts instanceof Date) {
+        d = ts;
+      } else {
+        return '-';
+      }
+      if (isNaN(d.getTime())) return '-';
+      return (
+        d.toLocaleString('id-ID', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Jakarta',
+        }) + ' WIB'
+      );
+    } catch {
+      return '-';
+    }
+  };
+
+  // Subscribe Saldo Real PT KDRT (Input Manual Owner)
   useEffect(() => {
-    syncAllKomisiRealToTransactions(currentUser?.uid || 'system', userProfile?.name || 'Sistem Auto-Sync')
-      .then((res) => {
-        if (res.totalSynced > 0) {
-          console.log(`Auto-synced ${res.totalSynced} Komisi Real to Buku Kas & Bank.`);
+    const unsub = subscribeSaldoRealPtKdrt((data) => {
+      setSaldoRealData(data);
+    });
+    return () => unsub();
+  }, []);
+
+  // Auto-sync / Backfill historical Komisi Real & Uang Rajin Mingguan to transactions on mount
+  useEffect(() => {
+    const currentUid = currentUser?.uid || 'system';
+    const currentName = userProfile?.name || 'Sistem Auto-Sync';
+
+    Promise.all([
+      syncAllKomisiRealToTransactions(currentUid, currentName),
+      syncAllUangRajinToTransactions(currentUid, currentName),
+    ])
+      .then(([komisiRes, uangRajinRes]) => {
+        if (komisiRes.totalNew > 0 || komisiRes.totalUpdated > 0) {
+          console.log(`Auto-synced Komisi Real: ${komisiRes.totalNew} new, ${komisiRes.totalUpdated} updated.`);
+        }
+        if (uangRajinRes.syncedCount > 0) {
+          console.log(`Auto-synced Uang Rajin: ${uangRajinRes.syncedCount} transaksi uang keluar dicatat.`);
         }
       })
       .catch((err) => {
-        console.warn('Auto-sync Komisi Real failed on mount:', err);
+        console.warn('Auto-sync data ke Buku Kas & Bank failed on mount:', err);
       });
   }, [currentUser?.uid, userProfile?.name]);
 
-  // Manual Trigger Sync Komisi Real
+  // Manual Trigger Sync Komisi Real & Uang Rajin Mingguan
   const handleManualSync = async () => {
     setSyncingKomisi(true);
+    const currentUid = currentUser?.uid || 'system';
+    const currentName = userProfile?.name || 'Sistem Auto-Sync';
+
     try {
-      const res = await syncAllKomisiRealToTransactions(
-        currentUser?.uid || 'system',
-        userProfile?.name || 'Sistem Auto-Sync'
+      const [komisiRes, uangRajinRes] = await Promise.all([
+        syncAllKomisiRealToTransactions(currentUid, currentName),
+        syncAllUangRajinToTransactions(currentUid, currentName),
+      ]);
+
+      setSyncSummary(komisiRes);
+      setIsSyncModalOpen(true);
+      showToast(
+        `Sinkronisasi Selesai: Komisi Real (${komisiRes.totalNew} baru, ${komisiRes.totalUpdated} update) & Uang Rajin (${uangRajinRes.syncedCount} tercatat sebagai Uang Keluar).`
       );
-      showToast(`Sinkronisasi selesai: ${res.totalSynced} data Komisi Real diselaraskan.`);
     } catch (err: any) {
-      showToast('Gagal sinkronisasi Komisi Real: ' + (err.message || 'Error server'), 'error');
+      showToast('Gagal sinkronisasi data: ' + (err.message || 'Error server'), 'error');
     } finally {
       setSyncingKomisi(false);
+    }
+  };
+
+  // Open Edit Saldo Real Modal (Owner only)
+  const handleOpenEditSaldoRealModal = () => {
+    setSaldoRealAmountInput(saldoRealData?.amount !== undefined ? saldoRealData.amount : '');
+    setSaldoRealNotesInput(saldoRealData?.notes || '');
+    setIsEditSaldoRealModalOpen(true);
+  };
+
+  // Save Saldo Real PT KDRT
+  const handleSaveSaldoReal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalAmount = Number(saldoRealAmountInput) || 0;
+    if (finalAmount < 0) {
+      showToast('Nominal Saldo Real tidak boleh negatif.', 'error');
+      return;
+    }
+
+    setSaldoRealSaving(true);
+    try {
+      await updateSaldoRealPtKdrt(
+        finalAmount,
+        saldoRealNotesInput,
+        currentUser?.uid || 'owner',
+        userProfile?.name || 'Owner'
+      );
+      setIsEditSaldoRealModalOpen(false);
+      showToast('Saldo Real PT KDRT berhasil disimpan ke Firebase.');
+    } catch (err: any) {
+      showToast('Gagal menyimpan Saldo Real: ' + (err.message || 'Error server'), 'error');
+    } finally {
+      setSaldoRealSaving(false);
     }
   };
 
@@ -595,6 +710,49 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
         }
       }
 
+      // Jika transaksi terhubung ke Uang Rajin Mingguan, kembalikan status ke BELUM DIBAYAR
+      const isUangRajinTx =
+        deletingTransaction.sourceType === 'ATTENDANCE_BONUS' ||
+        idToDelete.startsWith('UANG_RAJIN_') ||
+        idToDelete.startsWith('ATTENDANCE_BONUS_');
+
+      if (isUangRajinTx) {
+        const bonusDocId =
+          deletingTransaction.referenceId ||
+          (idToDelete.startsWith('UANG_RAJIN_') ? idToDelete.replace('UANG_RAJIN_', '') : null) ||
+          (idToDelete.startsWith('ATTENDANCE_BONUS_') ? idToDelete.replace('ATTENDANCE_BONUS_', '') : null);
+
+        if (bonusDocId) {
+          try {
+            const bonusRef = doc(db, 'attendanceBonuses', bonusDocId);
+            const bonusSnap = await getDoc(bonusRef);
+            if (bonusSnap.exists()) {
+              await updateDoc(bonusRef, {
+                status: 'CALCULATED',
+                paymentDate: null,
+                paymentAccount: null,
+                paymentTransactionId: null,
+                syncedTransactionId: null,
+                paidAt: null,
+                paidBy: null,
+                paidByName: null,
+                updatedAt: serverTimestamp(),
+              });
+
+              await catatAuditLog(
+                currentUserId,
+                currentUserName,
+                'UANG_RAJIN_RESET_UNPAID',
+                `Uang Rajin ID: ${bonusDocId}`,
+                `Status Uang Rajin otomatis dikembalikan ke BELUM DIBAYAR karena transaksi kas ${idToDelete} telah dihapus.`
+              );
+            }
+          } catch (bonusErr) {
+            console.warn('Gagal reset status uang rajin terkait transaksi yang dihapus:', bonusErr);
+          }
+        }
+      }
+
       await catatAuditLog(
         currentUserId,
         currentUserName,
@@ -668,11 +826,11 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
             type="button"
             onClick={handleManualSync}
             disabled={syncingKomisi}
-            title="Sinkronkan data Komisi Real dari Menu Performa/Omset ke Buku Kas & Bank"
+            title="Sinkronkan otomatis data Komisi Real & Uang Rajin Mingguan ke Buku Kas & Bank"
             className="flex items-center gap-1.5 rounded-xl border border-cyan-500/30 bg-cyan-950/40 px-3.5 py-2.5 text-xs font-bold text-cyan-300 hover:bg-cyan-900/50 hover:text-white transition active:scale-95 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${syncingKomisi ? 'animate-spin' : ''}`} />
-            <span>{syncingKomisi ? 'Menyinkronkan...' : 'Sinkronkan Komisi Real'}</span>
+            <span>{syncingKomisi ? 'Menyinkronkan...' : 'Sinkronkan Data (Komisi & Uang Rajin)'}</span>
           </button>
 
           <button
@@ -698,19 +856,19 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
       </div>
 
       {/* ============================================================
-          TOP 3 DASHBOARD PANELS
+          TOP 4 DASHBOARD CARDS
       ============================================================ */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {/* PANEL 1: TOTAL UANG MASUK */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* CARD 1: TOTAL UANG MASUK */}
         <div
-          id="panel-total-uang-masuk"
-          className="relative overflow-hidden rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-emerald-950/30 p-5 sm:p-6 shadow-lg flex flex-col justify-between"
+          id="card-total-uang-masuk"
+          className="relative overflow-hidden rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-zinc-900/95 via-zinc-900/70 to-emerald-950/30 p-5 shadow-lg flex flex-col justify-between"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
               1. Total Uang Masuk
             </span>
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <ArrowDownLeft className="h-5 w-5" />
             </div>
           </div>
@@ -718,10 +876,12 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
             <div className="text-2xl sm:text-3xl font-black tracking-tight text-emerald-400">
               {formatRupiah(selectedMonth ? periodCalculations.totalInMonth : globalCalculations.totalIn)}
             </div>
-            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
-              <span>{selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}</span>
+            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400 border-t border-zinc-800/80 pt-2">
+              <span className="font-semibold text-zinc-300">
+                {selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}
+              </span>
               {selectedMonth && (
-                <span className="text-zinc-400 text-[11px]">
+                <span className="text-zinc-500 text-[11px]">
                   All-time: {formatRupiah(globalCalculations.totalIn + globalCalculations.totalOpening)}
                 </span>
               )}
@@ -729,16 +889,16 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
           </div>
         </div>
 
-        {/* PANEL 2: TOTAL UANG KELUAR */}
+        {/* CARD 2: TOTAL UANG KELUAR */}
         <div
-          id="panel-total-uang-keluar"
-          className="relative overflow-hidden rounded-2xl border border-rose-500/20 bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-rose-950/30 p-5 sm:p-6 shadow-lg flex flex-col justify-between"
+          id="card-total-uang-keluar"
+          className="relative overflow-hidden rounded-2xl border border-rose-500/20 bg-gradient-to-br from-zinc-900/95 via-zinc-900/70 to-rose-950/30 p-5 shadow-lg flex flex-col justify-between"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-rose-400">
               2. Total Uang Keluar
             </span>
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20">
               <ArrowUpRight className="h-5 w-5" />
             </div>
           </div>
@@ -746,10 +906,12 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
             <div className="text-2xl sm:text-3xl font-black tracking-tight text-rose-400">
               {formatRupiah(selectedMonth ? periodCalculations.totalOutMonth : globalCalculations.totalOut)}
             </div>
-            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
-              <span>{selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}</span>
+            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400 border-t border-zinc-800/80 pt-2">
+              <span className="font-semibold text-zinc-300">
+                {selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}
+              </span>
               {selectedMonth && (
-                <span className="text-zinc-400 text-[11px]">
+                <span className="text-zinc-500 text-[11px]">
                   All-time: {formatRupiah(globalCalculations.totalOut)}
                 </span>
               )}
@@ -757,38 +919,116 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
           </div>
         </div>
 
-        {/* PANEL 3: SALDO REAL PT KDRT SAAT INI */}
+        {/* CARD 3: PROFIT / LOSS */}
         <div
-          id="panel-saldo-real-pt-kdrt"
-          className="relative overflow-hidden rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-zinc-900/95 via-zinc-900/80 to-cyan-950/40 p-5 sm:p-6 shadow-lg flex flex-col justify-between"
+          id="card-profit-loss"
+          className={`relative overflow-hidden rounded-2xl border p-5 shadow-lg flex flex-col justify-between ${
+            (selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0
+              ? 'border-emerald-500/30 bg-gradient-to-br from-zinc-900/95 via-zinc-900/70 to-emerald-950/20'
+              : 'border-rose-500/30 bg-gradient-to-br from-zinc-900/95 via-zinc-900/70 to-rose-950/20'
+          }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-              3. Saldo Real PT KDRT Saat Ini
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-300">
+              3. Profit / Loss
             </span>
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400">
-              <Wallet className="h-5 w-5" />
+            <div
+              className={`flex h-10 w-10 items-center justify-center rounded-xl border ${
+                (selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+              }`}
+            >
+              {(selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0 ? (
+                <TrendingUp className="h-5 w-5" />
+              ) : (
+                <TrendingDown className="h-5 w-5" />
+              )}
             </div>
           </div>
           <div className="mt-4">
             <div
               className={`text-2xl sm:text-3xl font-black tracking-tight ${
-                globalCalculations.grandTotalSaldo >= 0 ? 'text-white' : 'text-rose-400'
+                (selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0
+                  ? 'text-emerald-400'
+                  : 'text-rose-400'
               }`}
             >
-              {formatRupiah(globalCalculations.grandTotalSaldo)}
+              {(selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0 ? '+' : ''}
+              {formatRupiah(selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut)}
             </div>
-            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
-              <span>Saldo Kas/Bank Aktual</span>
+            <div className="mt-2 flex items-center justify-between text-xs text-zinc-400 border-t border-zinc-800/80 pt-2">
+              <span
+                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                  (selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0
+                    ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-rose-950/60 text-rose-400 border border-rose-500/30'
+                }`}
+              >
+                {(selectedMonth ? periodCalculations.netMonth : globalCalculations.totalIn - globalCalculations.totalOut) >= 0
+                  ? 'Surplus (Profit)'
+                  : 'Defisit (Loss)'}
+              </span>
               {selectedMonth && (
-                <span
-                  className={`text-[11px] font-semibold ${
-                    periodCalculations.netMonth >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  Bulan ini: {periodCalculations.netMonth >= 0 ? '+' : ''}
-                  {formatRupiah(periodCalculations.netMonth)}
+                <span className="text-zinc-500 text-[11px]">
+                  All-time: {globalCalculations.totalIn - globalCalculations.totalOut >= 0 ? '+' : ''}
+                  {formatRupiah(globalCalculations.totalIn - globalCalculations.totalOut)}
                 </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* CARD 4: SALDO REAL PT KDRT (MANUAL INPUT OWNER) */}
+        <div
+          id="card-saldo-real-pt-kdrt"
+          className="relative overflow-hidden rounded-2xl border border-cyan-500/40 bg-gradient-to-br from-zinc-900/95 via-zinc-900/80 to-cyan-950/40 p-5 shadow-lg flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
+                4. Saldo Real PT KDRT
+              </span>
+              <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300 border border-cyan-500/30">
+                Input Owner
+              </span>
+            </div>
+            {isOwnerOrManager ? (
+              <button
+                id="btn-edit-saldo-real"
+                type="button"
+                onClick={handleOpenEditSaldoRealModal}
+                title="Edit Saldo Real PT KDRT"
+                className="flex h-8 items-center gap-1 rounded-lg border border-cyan-500/40 bg-cyan-950/60 px-2.5 text-xs font-bold text-cyan-300 hover:bg-cyan-900 hover:text-white transition active:scale-95 shadow"
+              >
+                <Edit className="h-3.5 w-3.5" />
+                <span>Edit</span>
+              </button>
+            ) : (
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-800 text-zinc-500" title="Hanya Owner yang dapat mengubah">
+                <Lock className="h-4 w-4" />
+              </div>
+            )}
+          </div>
+          <div className="mt-4">
+            <div className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-baseline gap-2">
+              <span>{formatRupiah(Number(saldoRealData?.amount) || 0)}</span>
+            </div>
+            <div className="mt-2 flex flex-col gap-1 border-t border-zinc-800/80 pt-2 text-xs">
+              <div className="flex items-center justify-between text-zinc-400">
+                <span className="text-[11px] text-zinc-400 truncate">
+                  {saldoRealData?.updatedAt ? `Update: ${formatTimestampWIB(saldoRealData.updatedAt)}` : 'Belum diinput Owner'}
+                </span>
+                {saldoRealData?.updatedByName && (
+                  <span className="text-[10px] text-cyan-400 font-semibold truncate max-w-[90px]">
+                    oleh {saldoRealData.updatedByName}
+                  </span>
+                )}
+              </div>
+              {saldoRealData?.notes && (
+                <p className="text-[11px] text-zinc-400 truncate italic">
+                  "{saldoRealData.notes}"
+                </p>
               )}
             </div>
           </div>
@@ -1010,6 +1250,18 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
                     tx.sourceType === 'COMMISSION_REAL' ||
                     (tx.id || '').startsWith('COMMISSION_REAL_') ||
                     Boolean(tx.sourcePerformanceId);
+                  const isWithdrawal =
+                    tx.sourceType === 'WITHDRAWAL' ||
+                    (tx.id || '').startsWith('WITHDRAWAL_');
+                  const isUangRajin =
+                    tx.sourceType === 'ATTENDANCE_BONUS' ||
+                    (tx.id || '').startsWith('UANG_RAJIN_') ||
+                    (tx.id || '').startsWith('ATTENDANCE_BONUS_') ||
+                    Boolean(
+                      tx.referenceId &&
+                        (tx.category === 'Uang Rajin Mingguan' ||
+                          tx.description?.toLowerCase().includes('uang rajin'))
+                    );
 
                   return (
                     <tr
@@ -1049,6 +1301,16 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
                           {isCommissionReal && (
                             <span className="inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] font-bold text-cyan-400 border border-cyan-500/30 shrink-0">
                               Komisi Real TikTok
+                            </span>
+                          )}
+                          {isWithdrawal && (
+                            <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-400 border border-emerald-500/30 shrink-0">
+                              Penarikan Medsos
+                            </span>
+                          )}
+                          {isUangRajin && (
+                            <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-400 border border-amber-500/30 shrink-0">
+                              Uang Rajin
                             </span>
                           )}
                         </div>
@@ -1443,6 +1705,213 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
               >
                 {deleteLoading && <RefreshCw className="h-4 w-4 animate-spin" />}
                 <span>Hapus Transaksi</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          MODAL: EDIT SALDO REAL PT KDRT (INPUT MANUAL OWNER)
+      ============================================================ */}
+      {isEditSaldoRealModalOpen && (
+        <div
+          id="modal-edit-saldo-real"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-fadeIn"
+        >
+          <div className="relative w-full max-w-lg rounded-2xl border border-cyan-500/40 bg-zinc-900 p-6 shadow-2xl">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                  <Wallet className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Edit Saldo Real PT KDRT
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Input manual saldo kas/bank riil perusahaan oleh Owner
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditSaldoRealModalOpen(false)}
+                disabled={saldoRealSaving}
+                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Explanation Note */}
+            <div className="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-950/30 p-3.5 text-xs text-cyan-200/90 leading-relaxed">
+              <div className="flex items-start gap-2">
+                <Info className="h-4 w-4 text-cyan-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-cyan-300">Catatan Saldo Aktual:</span>
+                  <p className="mt-0.5 text-zinc-300">
+                    Angka ini merupakan saldo kas/bank fisik aktual PT KDRT yang diinput mandiri oleh Owner. Nilai ini tidak terpengaruh oleh kalkulasi transaksi harian.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSaveSaldoReal} className="mt-4 space-y-4 text-xs">
+              {/* Saldo Saat Ini (Read-only reference) */}
+              <div>
+                <label className="block font-bold text-zinc-400 mb-1">
+                  Saldo Real Saat Ini
+                </label>
+                <div className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm font-bold text-zinc-300">
+                  {formatRupiah(Number(saldoRealData?.amount) || 0)}
+                  {saldoRealData?.updatedAt && (
+                    <span className="ml-2 text-[11px] font-normal text-zinc-500">
+                      (Diperbarui: {formatTimestampWIB(saldoRealData.updatedAt)})
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Saldo Real Baru (Input) */}
+              <div>
+                <label className="block font-bold text-zinc-200 mb-1">
+                  Saldo Real Baru (Rp) <span className="text-cyan-400">*</span>
+                </label>
+                <CurrencyInput
+                  value={saldoRealAmountInput}
+                  onChange={(val) => setSaldoRealAmountInput(val)}
+                  placeholder="0"
+                  required
+                  className="w-full rounded-xl border border-cyan-500/50 bg-zinc-800 px-3.5 py-3 text-base font-bold text-white placeholder-zinc-500 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                />
+              </div>
+
+              {/* Catatan / Keterangan Penyesuaian */}
+              <div>
+                <label className="block font-bold text-zinc-200 mb-1">
+                  Catatan / Keterangan Penyesuaian (Opsional)
+                </label>
+                <textarea
+                  value={saldoRealNotesInput}
+                  onChange={(e) => setSaldoRealNotesInput(e.target.value)}
+                  rows={2}
+                  placeholder="Contoh: Rekening BCA + kas operasional kantor per 28 Agustus 2026"
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs text-white placeholder-zinc-500 focus:border-cyan-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsEditSaldoRealModalOpen(false)}
+                  disabled={saldoRealSaving}
+                  className="rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-xs font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={saldoRealSaving}
+                  className="flex items-center gap-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-cyan-950/50 transition active:scale-95 disabled:opacity-60"
+                >
+                  {saldoRealSaving && <RefreshCw className="h-4 w-4 animate-spin" />}
+                  <span>{saldoRealSaving ? 'Menyimpan...' : 'Simpan Saldo Real'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          MODAL: HASIL SINKRONISASI KOMISI REAL
+      ============================================================ */}
+      {isSyncModalOpen && syncSummary && (
+        <div
+          id="modal-sync-summary"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-fadeIn"
+        >
+          <div className="relative w-full max-w-lg rounded-2xl border border-cyan-500/40 bg-zinc-900 p-6 shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Hasil Sinkronisasi Komisi Real
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Data Omset / Komisi Real &rarr; Buku Kas & Bank
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSyncModalOpen(false)}
+                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3">
+                <div className="text-[11px] font-semibold text-emerald-400">Transaksi Baru</div>
+                <div className="mt-1 text-xl font-black text-white">{syncSummary.totalNew}</div>
+                <div className="text-[10px] text-emerald-300/80">Ditambahkan ke Buku Kas</div>
+              </div>
+
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-3">
+                <div className="text-[11px] font-semibold text-cyan-400">Diperbarui</div>
+                <div className="mt-1 text-xl font-black text-white">{syncSummary.totalUpdated}</div>
+                <div className="text-[10px] text-cyan-300/80">Penyesuaian nominal/data</div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-700 bg-zinc-800/40 p-3">
+                <div className="text-[11px] font-semibold text-zinc-300">Sudah Sesuai</div>
+                <div className="mt-1 text-xl font-black text-white">{syncSummary.totalAlreadySynced}</div>
+                <div className="text-[10px] text-zinc-400">Tidak ada perubahan</div>
+              </div>
+
+              <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 p-3">
+                <div className="text-[11px] font-semibold text-indigo-400">Duplikasi</div>
+                <div className="mt-1 text-xl font-black text-white">0</div>
+                <div className="text-[10px] text-indigo-300/80">Anti-duplicate terjamin</div>
+              </div>
+            </div>
+
+            {/* Details List if any additions or updates */}
+            {syncSummary.details && syncSummary.details.length > 0 && (
+              <div className="mt-4">
+                <label className="block text-[11px] font-bold text-zinc-400 mb-1.5">
+                  Rincian Data yang Diproses ({syncSummary.details.length}):
+                </label>
+                <div className="max-h-40 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950/80 p-2.5 space-y-1 text-[11px] font-mono text-zinc-300">
+                  {syncSummary.details.map((detail, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5 py-0.5">
+                      <span className="text-cyan-400">&bull;</span>
+                      <span>{detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="mt-5 flex justify-end border-t border-zinc-800 pt-4">
+              <button
+                type="button"
+                onClick={() => setIsSyncModalOpen(false)}
+                className="rounded-xl bg-cyan-600 hover:bg-cyan-500 px-5 py-2 text-xs font-bold text-white transition active:scale-95"
+              >
+                Tutup
               </button>
             </div>
           </div>
