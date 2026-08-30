@@ -38,10 +38,12 @@ import {
   Camera,
   Sparkles,
   MapPin,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { ProductScanModal } from '../components/sample/ProductScanModal';
 import { AddProductSampleModal } from '../components/sample/AddProductSampleModal';
+import { ImportSpreadsheetModal } from '../components/sample/ImportSpreadsheetModal';
 import { AIScanResult } from '../services/aiScanService';
 import {
   AffiliateSample,
@@ -61,6 +63,7 @@ import {
   updateSampleContentProgress,
   deleteSample,
   uploadSampleImage,
+  syncAllSamplesToFinancialTransactions,
 } from '../services/sampleService';
 import {
   subscribeProducts,
@@ -78,8 +81,6 @@ interface DatabaseSampelPageProps {
   initialProductId?: string;
   initialTab?: 'SAMPEL' | 'PRODUK' | 'MASTER_PRODUK';
 }
-
-const STATUS_FLOW: SampleStatus[] = ['DIPESAN', 'DIKIRIM', 'DITERIMA', 'DIGUNAKAN', 'SELESAI'];
 
 export const MASTER_KATEGORI_OPTIONS = [
   'Skincare & Kecantikan',
@@ -127,11 +128,17 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [scopeFilter, setScopeFilter] = useState<'SEMUA' | ScopeType>(isInvestor ? 'SHARING' : 'SEMUA');
   const [locationFilter, setLocationFilter] = useState<string>('SEMUA');
+  
+  // Periode Filter untuk Dashboard Metrik (Default: Bulan Sekarang YYYY-MM)
+  const currentMonthStr = new Date().toISOString().slice(0, 7);
+  const [selectedPeriod, setSelectedPeriod] = useState<string>(currentMonthStr);
+  const [isSyncingLedger, setIsSyncingLedger] = useState<boolean>(false);
+
   const [activeTab, setActiveTab] = useState<'SAMPEL' | 'MASTER_PRODUK'>(
     initialTab === 'PRODUK' || initialTab === 'MASTER_PRODUK' ? 'MASTER_PRODUK' : 'SAMPEL'
   );
-  // Mobile tab state for BUG 11: Fokus SAMPEL BARU & SAMPEL LAMA di mobile
-  const [mobileSampleTab, setMobileSampleTab] = useState<'BARU' | 'LAMA'>('BARU');
+  // Mobile tab state: BELUM SELESAI vs SELESAI
+  const [mobileSampleTab, setMobileSampleTab] = useState<'BELUM_SELESAI' | 'SELESAI'>('BELUM_SELESAI');
 
   // AI Screenshot Scan Modal state
   const [isScanModalOpen, setIsScanModalOpen] = useState<boolean>(false);
@@ -139,6 +146,9 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
   // Unified Single Entry Modal State (+ TAMBAH PRODUK / SAMPEL)
   const [isAddProductSampleModalOpen, setIsAddProductSampleModalOpen] = useState<boolean>(false);
   const [scanDataForUnifiedForm, setScanDataForUnifiedForm] = useState<AIScanResult | null>(null);
+
+  // Spreadsheet Import Modal State (PHASE: IMPORT SPREADSHEET SAMPLE DATABASE)
+  const [isImportSpreadsheetModalOpen, setIsImportSpreadsheetModalOpen] = useState<boolean>(false);
 
   // Chooser Modal State (+ TAMBAH PRODUK / SAMPEL)
   const [showAddChooser, setShowAddChooser] = useState<boolean>(false);
@@ -192,7 +202,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
     autoCreateExpense: boolean;
     autoCreateTask: boolean;
     notes: string;
-    sellerName: string;
     brandName: string;
     size: string;
     locationId?: string;
@@ -217,7 +226,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
     autoCreateExpense: true,
     autoCreateTask: true,
     notes: '',
-    sellerName: '',
     brandName: '',
     size: '',
     locationId: '',
@@ -245,9 +253,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
   // Output progress modal
   const [progressModalSample, setProgressModalSample] = useState<AffiliateSample | null>(null);
   const [newCompletedCount, setNewCompletedCount] = useState<number>(0);
-
-  // Status Change Modal
-  const [statusModalSample, setStatusModalSample] = useState<AffiliateSample | null>(null);
 
   // Detail Modal
   const [detailSample, setDetailSample] = useState<AffiliateSample | null>(null);
@@ -351,55 +356,59 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
     });
   }, [samples, scopeFilter, locationFilter, searchQuery, isInvestor]);
 
-  // Dashboard Metrics (Sampel Baru, Sampel Dikirim, Sampel Diterima, Sampel Belum Dibuat Konten, & Total Belanja)
-  const metrics = useMemo(() => {
-    let baruCount = 0;
-    let dikirimCount = 0;
-    let diterimaCount = 0;
+  // Dashboard Metrics & Period Filter
+  // TOTAL BELANJA SAMPEL: Sum of total cost / totalBayar for the selected period
+  // TOTAL SAMPEL: Count of all samples in Database Sampel for the period
+  // BELUM DIBUAT KONTEN: Samples not meeting target VT
+  // TOTAL SELESAI / TARGET TERPENUHI: Samples meeting target VT
+  const { periodFilteredSamples, metrics } = useMemo(() => {
+    let totalBelanjaSampel = 0;
+    let totalSampel = 0;
     let belumKontenCount = 0;
-    let totalBelanjaKeseluruhan = 0;
-    let totalBelanjaBulanIni = 0;
+    let targetTerpenuhiCount = 0;
 
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const periodSamples = filteredSamples.filter((s) => {
+      if (selectedPeriod === 'SEMUA') return true;
+      if (!s.purchaseDate) return false;
+      return s.purchaseDate.startsWith(selectedPeriod);
+    });
 
-    filteredSamples.forEach((s) => {
-      if (s.status === 'DIPESAN') baruCount++;
-      if (s.status === 'DIKIRIM') dikirimCount++;
-      if (s.status === 'DITERIMA' || s.status === 'DIGUNAKAN') diterimaCount++;
-      
+    periodSamples.forEach((s) => {
+      totalSampel++;
+      const cost = Number(s.totalPaid || s.totalCost || (Number(s.samplePrice || 0) * Number(s.quantity || 1))) || 0;
+      totalBelanjaSampel += cost;
+
       const target = Number(s.targetContent) || 1;
       const current = Number(s.completedContent) || 0;
-      if (s.status !== 'SELESAI' && current < target) {
+      if (s.status === 'SELESAI' || current >= target) {
+        targetTerpenuhiCount++;
+      } else {
         belumKontenCount++;
-      }
-
-      const itemTotalCost = s.quantity * s.unitPrice;
-      totalBelanjaKeseluruhan += itemTotalCost;
-
-      if (s.purchaseDate && s.purchaseDate.startsWith(currentMonth)) {
-        totalBelanjaBulanIni += itemTotalCost;
       }
     });
 
-    return { 
-      baruCount, 
-      dikirimCount, 
-      diterimaCount, 
-      belumKontenCount,
-      totalBelanjaKeseluruhan,
-      totalBelanjaBulanIni
+    return {
+      periodFilteredSamples: periodSamples,
+      metrics: {
+        totalBelanjaSampel,
+        totalSampel,
+        belumKontenCount,
+        targetTerpenuhiCount,
+      },
     };
-  }, [filteredSamples]);
+  }, [filteredSamples, selectedPeriod]);
 
-  // Split into SAMPEL BARU vs SAMPEL LAMA
-  // SAMPEL BARU: Status belum SELESAI / masih proses (DIPESAN, DIKIRIM, DITERIMA, DIGUNAKAN)
-  // SAMPEL LAMA: Status SELESAI atau semua target VT sudah tuntas
+  // Split into:
+  // BELUM DIBUAT KONTEN / PROSES BERJALAN (current < target)
+  // TOTAL SELESAI / TARGET TERPENUHI (current >= target || status === 'SELESAI')
   const { newSamples, oldSamples } = useMemo(() => {
     const fresh: AffiliateSample[] = [];
     const archived: AffiliateSample[] = [];
 
     filteredSamples.forEach((s) => {
-      const isDone = s.status === 'SELESAI' || (s.targetContent && s.completedContent >= s.targetContent);
+      const target = Number(s.targetContent) || 1;
+      const current = Number(s.completedContent) || 0;
+      const isDone = s.status === 'SELESAI' || current >= target;
       if (isDone) {
         archived.push(s);
       } else {
@@ -409,6 +418,22 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
     return { newSamples: fresh, oldSamples: archived };
   }, [filteredSamples]);
+
+  // Handle manual sync to Buku Kas & Bank
+  const handleSyncToFinancialLedger = async () => {
+    if (isSyncingLedger) return;
+    setIsSyncingLedger(true);
+    try {
+      const uid = userProfile?.uid || currentUser?.uid || 'system';
+      const name = userProfile?.name || currentUser?.displayName || 'Admin';
+      const result = await syncAllSamplesToFinancialTransactions(uid, name);
+      setSuccessToast(`Berhasil menyinkronkan ${result.syncedCount} transaksi pembelian sampel (Rp ${result.totalAmount.toLocaleString('id-ID')}) ke Buku Kas & Bank.`);
+    } catch (err: any) {
+      alert('Gagal menyinkronkan ke Buku Kas & Bank: ' + err.message);
+    } finally {
+      setIsSyncingLedger(false);
+    }
+  };
 
   // Filtered Master Products
   const filteredProducts = useMemo(() => {
@@ -691,19 +716,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
     }
   };
 
-  // Quick Status Update
-  const handleQuickStatusChange = async (sample: AffiliateSample, newStatus: SampleStatus) => {
-    try {
-      const uid = userProfile?.uid || 'system';
-      const name = userProfile?.name || 'User';
-      await updateSampleStatus(sample.id!, sample, newStatus, uid, name);
-      setStatusModalSample(null);
-      setSuccessToast(`Status sampel diubah menjadi ${newStatus}.`);
-    } catch (err: any) {
-      alert('Gagal update status: ' + err.message);
-    }
-  };
-
   // Quick Progress Content Update
   const handleUpdateProgressSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -795,9 +807,20 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
         {!isInvestor && (role !== 'EMPLOYEE' || employeeProfile?.permissions?.canCreateSampleProduct || isEmployee) && (
           <div className="flex items-center gap-3 flex-wrap">
             <button
+              id="btn-import-spreadsheet"
+              type="button"
+              onClick={() => setIsImportSpreadsheetModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded-2xl bg-zinc-800/90 hover:bg-zinc-700 active:scale-95 text-emerald-400 hover:text-emerald-300 px-4 py-4 text-xs sm:text-sm font-black shadow-lg border border-emerald-500/30 transition-all cursor-pointer"
+            >
+              <FileSpreadsheet className="h-5 w-5 text-emerald-400" />
+              <span>📥 IMPORT SPREADSHEET</span>
+            </button>
+
+            <button
               id="btn-tambah-produk-sampel"
+              type="button"
               onClick={() => setIsAddProductSampleModalOpen(true)}
-              className="inline-flex items-center gap-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white px-5 py-4 text-sm font-black shadow-lg shadow-emerald-600/25 transition-all cursor-pointer border border-emerald-400/30"
+              className="inline-flex items-center gap-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white px-5 py-4 text-xs sm:text-sm font-black shadow-lg shadow-emerald-600/25 transition-all cursor-pointer border border-emerald-400/30"
             >
               <Plus className="h-5 w-5 stroke-[3]" />
               <span>+ TAMBAH PRODUK / SAMPEL</span>
@@ -806,62 +829,117 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
         )}
       </div>
 
+      {/* Dashboard Period Selector & Financial Sync Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
+            <Calendar className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="text-xs font-black text-zinc-900 uppercase tracking-wide">
+              PERIODE REKAPITULASI SAMPEL
+            </h3>
+            <p className="text-[11px] text-zinc-500 font-medium">
+              Metrik dihitung berdasarkan tanggal pembelian sampel pada bulan yang dipilih.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-xl px-3 py-1.5 shadow-2xs">
+            <span className="text-[11px] font-bold text-zinc-500">Bulan:</span>
+            <input
+              type="month"
+              value={selectedPeriod === 'SEMUA' ? '' : selectedPeriod}
+              onChange={(e) => setSelectedPeriod(e.target.value || 'SEMUA')}
+              className="bg-transparent text-xs font-black text-zinc-900 focus:outline-hidden cursor-pointer"
+            />
+            {selectedPeriod !== 'SEMUA' && (
+              <button
+                type="button"
+                onClick={() => setSelectedPeriod('SEMUA')}
+                className="text-[10px] font-bold text-zinc-400 hover:text-zinc-700 underline ml-1"
+              >
+                Semua Periode
+              </button>
+            )}
+          </div>
+
+          {(isOwner || isManager) && (
+            <button
+              type="button"
+              onClick={handleSyncToFinancialLedger}
+              disabled={isSyncingLedger}
+              title="Sinkronkan seluruh data pembelian sampel ke Buku Kas & Bank sebagai Uang Keluar"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3 py-2 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isSyncingLedger ? 'animate-spin' : ''}`} />
+              <span>{isSyncingLedger ? 'Menyinkronkan...' : 'Sinkron ke Buku Kas'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* 4 KPI Dashboard Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Metrik 1: Sampel Baru */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 shadow-2xs">
+        {/* Metrik 1: TOTAL BELANJA SAMPEL */}
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 shadow-2xs">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-zinc-400">
-              SAMPEL BARU
+            <span className="text-[11px] font-black uppercase tracking-wider text-emerald-800">
+              TOTAL BELANJA SAMPEL
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-              <Clock className="h-4 w-4" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-200/80 text-emerald-900">
+              <DollarSign className="h-4 w-4" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-black text-zinc-900 mt-2">{metrics.baruCount}</p>
-          <span className="text-[11px] text-zinc-500 font-medium">Dalam proses pemesanan</span>
+          <p className="text-xl sm:text-2xl font-black text-emerald-950 mt-2">
+            {formatRupiah(metrics.totalBelanjaSampel)}
+          </p>
+          <span className="text-[11px] text-emerald-700 font-medium">
+            {selectedPeriod === 'SEMUA' ? 'Total seluruh periode' : `Periode ${selectedPeriod}`}
+          </span>
         </div>
 
-        {/* Metrik 2: Sampel Dikirim */}
-        <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5 shadow-2xs">
+        {/* Metrik 2: TOTAL SAMPEL */}
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4 sm:p-5 shadow-2xs">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-amber-700">
-              SAMPEL DIKIRIM
+            <span className="text-[11px] font-black uppercase tracking-wider text-blue-800">
+              TOTAL SAMPEL
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
-              <Truck className="h-4 w-4" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-200/80 text-blue-900">
+              <Package className="h-4 w-4" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-black text-amber-900 mt-2">{metrics.dikirimCount}</p>
-          <span className="text-[11px] text-amber-700 font-medium">Dalam ekspedisi / pengiriman</span>
+          <p className="text-2xl sm:text-3xl font-black text-blue-950 mt-2">{metrics.totalSampel}</p>
+          <span className="text-[11px] text-blue-700 font-medium">Diinput pada periode ini</span>
         </div>
 
-        {/* Metrik 3: Sampel Diterima */}
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 sm:p-5 shadow-2xs">
+        {/* Metrik 3: BELUM DIBUAT KONTEN */}
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 sm:p-5 shadow-2xs">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-emerald-700">
-              SAMPEL SUDAH DITERIMA
-            </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-800">
-              <CheckCheck className="h-4 w-4" />
-            </div>
-          </div>
-          <p className="text-2xl sm:text-3xl font-black text-emerald-900 mt-2">{metrics.diterimaCount}</p>
-          <span className="text-[11px] text-emerald-700 font-medium">Siap / sedang dibuat konten</span>
-        </div>
-
-        {/* Metrik 4: Sampel Belum Dibuat Konten */}
-        <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4 sm:p-5 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-rose-700">
+            <span className="text-[11px] font-black uppercase tracking-wider text-rose-800">
               BELUM DIBUAT KONTEN
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100 text-rose-800">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-200/80 text-rose-900">
               <PlayCircle className="h-4 w-4" />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl font-black text-rose-900 mt-2">{metrics.belumKontenCount}</p>
+          <p className="text-2xl sm:text-3xl font-black text-rose-950 mt-2">{metrics.belumKontenCount}</p>
           <span className="text-[11px] text-rose-700 font-medium">Target VT belum terpenuhi</span>
+        </div>
+
+        {/* Metrik 4: TOTAL SELESAI / TARGET TERPENUHI */}
+        <div className="rounded-2xl border border-teal-200 bg-teal-50/50 p-4 sm:p-5 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-black uppercase tracking-wider text-teal-800">
+              TARGET TERPENUHI
+            </span>
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-200/80 text-teal-900">
+              <CheckCheck className="h-4 w-4" />
+            </div>
+          </div>
+          <p className="text-2xl sm:text-3xl font-black text-teal-950 mt-2">{metrics.targetTerpenuhiCount}</p>
+          <span className="text-[11px] text-teal-700 font-medium">Target VT selesai tuntas</span>
         </div>
       </div>
 
@@ -959,47 +1037,47 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       {/* Main Content Area */}
       {activeTab === 'SAMPEL' ? (
         <div className="space-y-4">
-          {/* Mobile Tab Switcher for BUG 11: Hanya SAMPEL BARU & SAMPEL LAMA di mobile */}
+          {/* Mobile Tab Switcher: Hanya BELUM SELESAI & SELESAI di mobile */}
           <div className="flex lg:hidden items-center p-1 bg-zinc-100 rounded-2xl border border-zinc-200 gap-1.5">
             <button
               type="button"
-              onClick={() => setMobileSampleTab('BARU')}
+              onClick={() => setMobileSampleTab('BELUM_SELESAI')}
               className={`flex-1 py-2.5 px-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                mobileSampleTab === 'BARU'
+                mobileSampleTab === 'BELUM_SELESAI'
                   ? 'bg-amber-500 text-white shadow-xs'
                   : 'text-zinc-600 hover:text-zinc-900 bg-white/60'
               }`}
             >
-              <span>🟢 SAMPEL BARU</span>
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${mobileSampleTab === 'BARU' ? 'bg-amber-600 text-white' : 'bg-zinc-200 text-zinc-700'}`}>
+              <span>🟢 BELUM SELESAI</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${mobileSampleTab === 'BELUM_SELESAI' ? 'bg-amber-600 text-white' : 'bg-zinc-200 text-zinc-700'}`}>
                 {newSamples.length}
               </span>
             </button>
             <button
               type="button"
-              onClick={() => setMobileSampleTab('LAMA')}
+              onClick={() => setMobileSampleTab('SELESAI')}
               className={`flex-1 py-2.5 px-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                mobileSampleTab === 'LAMA'
+                mobileSampleTab === 'SELESAI'
                   ? 'bg-zinc-800 text-white shadow-xs'
                   : 'text-zinc-600 hover:text-zinc-900 bg-white/60'
               }`}
             >
-              <span>📦 SAMPEL LAMA</span>
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${mobileSampleTab === 'LAMA' ? 'bg-zinc-700 text-white' : 'bg-zinc-200 text-zinc-700'}`}>
+              <span>✅ TARGET TERPENUHI</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${mobileSampleTab === 'SELESAI' ? 'bg-zinc-700 text-white' : 'bg-zinc-200 text-zinc-700'}`}>
                 {oldSamples.length}
               </span>
             </button>
           </div>
 
-          {/* ================= 2-COLUMN VIEW: SAMPEL BARU VS SAMPEL LAMA ================= */}
+          {/* ================= 2-COLUMN VIEW: BELUM SELESAI VS SELESAI ================= */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* KOLOM 1: SAMPEL BARU (PROSES TERBARU / BUTUH PERHATIAN) */}
-            <div className={`space-y-4 ${mobileSampleTab === 'LAMA' ? 'hidden lg:block' : 'block'}`}>
+            {/* KOLOM 1: BELUM DIBUAT KONTEN / PROSES BERJALAN */}
+            <div className={`space-y-4 ${mobileSampleTab === 'SELESAI' ? 'hidden lg:block' : 'block'}`}>
               <div className="flex items-center justify-between bg-amber-50/70 border border-amber-200 rounded-2xl px-4 py-3">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-amber-500 animate-pulse" />
                   <h2 className="font-black text-sm text-zinc-900 tracking-tight">
-                    {isEmployee ? 'PRODUK BELUM DIKONTENKAN' : 'SAMPEL BARU (PROSES BERJALAN)'}
+                    BELUM DIBUAT KONTEN (PROSES BERJALAN)
                   </h2>
                 </div>
                 <span className="rounded-full bg-amber-200/80 px-2.5 py-0.5 text-xs font-black text-amber-900">
@@ -1009,7 +1087,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
             {newSamples.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 p-8 text-center text-xs text-zinc-400">
-                {isEmployee ? 'Semua produk sudah dikontenkan.' : 'Tidak ada sampel baru yang sedang berjalan.'}
+                Semua sampel sudah memenuhi target konten VT.
               </div>
             ) : (
               <div className="space-y-3">
@@ -1047,6 +1125,12 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                               <span>{sample.accountName || 'Akun -'}</span>
                               <span>•</span>
                               <span className="font-semibold text-zinc-700">PIC: {sample.employeeName || '-'}</span>
+                              {sample.brandName && (
+                                <>
+                                  <span>•</span>
+                                  <span className="font-medium text-zinc-600">Brand: {sample.brandName}</span>
+                                </>
+                              )}
                               <span>•</span>
                               {sample.locationCode ? (
                                 <span className="inline-flex items-center gap-0.5 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
@@ -1063,22 +1147,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                         </div>
 
                         <div className="flex flex-col items-end gap-1 shrink-0">
-                          <span
-                            className={`rounded-full px-2.5 py-0.5 text-[10px] font-black ${
-                              sample.status === 'DIPESAN'
-                                ? 'bg-blue-100 text-blue-800'
-                                : sample.status === 'DIKIRIM'
-                                ? 'bg-amber-100 text-amber-800'
-                                : sample.status === 'DITERIMA'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : sample.status === 'DIGUNAKAN'
-                                ? 'bg-purple-100 text-purple-800'
-                                : 'bg-zinc-100 text-zinc-800'
-                            }`}
-                          >
-                            {sample.status}
-                          </span>
-
                           <span
                             className={`rounded-md px-1.5 py-0.5 text-[9px] font-extrabold ${
                               sample.scope === 'SHARING'
@@ -1124,12 +1192,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                             >
                               + Update VT
                             </button>
-                            <button
-                              onClick={() => setStatusModalSample(sample)}
-                              className="rounded-lg bg-zinc-100 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-200 transition-colors"
-                            >
-                              Status
-                            </button>
                           </div>
                         ) : (
                           <div className="text-[11px] font-medium text-zinc-400">
@@ -1171,13 +1233,13 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
             )}
           </div>
 
-          {/* KOLOM 2: SAMPEL LAMA (RIWAYAT SELESAI / SELESAI TARGET) */}
-          <div className={`space-y-4 ${mobileSampleTab === 'BARU' ? 'hidden lg:block' : 'block'}`}>
+          {/* KOLOM 2: TOTAL SELESAI / TARGET TERPENUHI */}
+          <div className={`space-y-4 ${mobileSampleTab === 'BELUM_SELESAI' ? 'hidden lg:block' : 'block'}`}>
             <div className="flex items-center justify-between bg-zinc-100 border border-zinc-200 rounded-2xl px-4 py-3">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                 <h2 className="font-black text-sm text-zinc-900 tracking-tight">
-                  {isEmployee ? 'SELESAI DIKONTENKAN' : 'SAMPEL LAMA (RIWAYAT SELESAI)'}
+                  TOTAL SELESAI (TARGET TERPENUHI)
                 </h2>
               </div>
               <span className="rounded-full bg-zinc-200 px-2.5 py-0.5 text-xs font-black text-zinc-700">
@@ -1187,7 +1249,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
             {oldSamples.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 p-8 text-center text-xs text-zinc-400">
-                {isEmployee ? 'Belum ada produk yang selesai dikontenkan.' : 'Belum ada riwayat sampel yang selesai.'}
+                Belum ada sampel yang memenuhi target konten.
               </div>
             ) : (
               <div className="space-y-3">
@@ -1219,6 +1281,12 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                             <span>{sample.accountName || 'Akun -'}</span>
                             <span>•</span>
                             <span>PIC: {sample.employeeName || '-'}</span>
+                            {sample.brandName && (
+                              <>
+                                <span>•</span>
+                                <span className="font-medium text-zinc-600">Brand: {sample.brandName}</span>
+                              </>
+                            )}
                             <span>•</span>
                             {sample.locationCode ? (
                               <span className="inline-flex items-center gap-0.5 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
@@ -1236,7 +1304,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
                       <div className="flex flex-col items-end gap-1 shrink-0">
                         <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[10px] font-black flex items-center gap-1">
-                          <Check className="h-3 w-3" /> SELESAI
+                          <Check className="h-3 w-3" /> TARGET TERCAPAI
                         </span>
                         <span className="text-[10px] font-bold text-zinc-600">
                           {sample.completedContent}/{sample.targetContent} {sample.unitContent || 'VT'}
@@ -1246,7 +1314,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
                     <div className="flex items-center justify-between pt-2 border-t border-zinc-200 text-xs">
                       <span className="text-[11px] text-zinc-400">
-                        {!isEmployee ? `Biaya: ${formatRupiah(sample.totalCost || 0)}` : `Tanggal: ${formatTanggal(sample.purchaseDate)}`}
+                        {!isEmployee ? `Biaya: ${formatRupiah(sample.totalPaid || sample.totalCost || 0)}` : `Tanggal: ${formatTanggal(sample.purchaseDate)}`}
                       </span>
                       <div className="flex items-center gap-2">
                         <button
@@ -1613,25 +1681,13 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
               </div>
 
               <div>
-                <label className="block font-bold text-zinc-700 mb-1">Nama Seller *</label>
-                <input
-                  type="text"
-                  required
-                  value={sampleFormData.sellerName}
-                  onChange={(e) => setSampleFormData({ ...sampleFormData, sellerName: e.target.value })}
-                  placeholder="Nama toko / seller tempat sampel dibeli"
-                  className="w-full rounded-xl border border-zinc-300 p-2.5 text-sm font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-zinc-700 mb-1">Nama Brand *</label>
+                <label className="block font-bold text-zinc-700 mb-1">Nama Brand / Toko *</label>
                 <input
                   type="text"
                   required
                   value={sampleFormData.brandName}
                   onChange={(e) => setSampleFormData({ ...sampleFormData, brandName: e.target.value })}
-                  placeholder="Nama brand produk sampel"
+                  placeholder="Nama brand atau toko penjual sampel"
                   className="w-full rounded-xl border border-zinc-300 p-2.5 text-sm font-bold"
                 />
               </div>
@@ -1853,43 +1909,20 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                 </p>
               </div>
 
-              <div className={`grid ${isEmployee ? 'grid-cols-1' : 'grid-cols-2'} gap-3`}>
+              {!isEmployee && (
                 <div>
-                  <label className="block font-bold text-zinc-700 mb-1">Status Sampel</label>
-                  {editingSample ? (
-                    <select
-                      value={sampleFormData.status}
-                      onChange={(e) => setSampleFormData({ ...sampleFormData, status: e.target.value as SampleStatus })}
-                      className="w-full rounded-xl border border-zinc-300 p-2 font-bold"
-                    >
-                      {STATUS_FLOW.map((st) => (
-                        <option key={st} value={st}>
-                          {st}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div className="w-full rounded-xl border border-emerald-200 bg-emerald-50 p-2 font-bold text-emerald-700">
-                      DITERIMA (Sampel sudah di kantor)
-                    </div>
-                  )}
+                  <label className="block font-bold text-zinc-700 mb-1">Scope</label>
+                  <select
+                    disabled={isInvestor}
+                    value={sampleFormData.scope}
+                    onChange={(e) => setSampleFormData({ ...sampleFormData, scope: e.target.value as ScopeType })}
+                    className="w-full rounded-xl border border-zinc-300 p-2 font-bold"
+                  >
+                    <option value="SHARING">SHARING</option>
+                    <option value="PRIBADI">PRIBADI</option>
+                  </select>
                 </div>
-
-                {!isEmployee && (
-                  <div>
-                    <label className="block font-bold text-zinc-700 mb-1">Scope</label>
-                    <select
-                      disabled={isInvestor}
-                      value={sampleFormData.scope}
-                      onChange={(e) => setSampleFormData({ ...sampleFormData, scope: e.target.value as ScopeType })}
-                      className="w-full rounded-xl border border-zinc-300 p-2 font-bold"
-                    >
-                      <option value="SHARING">SHARING</option>
-                      <option value="PRIBADI">PRIBADI</option>
-                    </select>
-                  </div>
-                )}
-              </div>
+              )}
 
               <div>
                 <label className="block font-bold text-zinc-700 mb-1">Catatan / Link Toko</label>
@@ -1992,38 +2025,6 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
         </div>
       )}
 
-      {/* ================= MODAL: QUICK UPDATE STATUS ================= */}
-      {statusModalSample && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-zinc-900 shadow-2xl border border-zinc-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-zinc-100 pb-2">
-              <h3 className="text-sm font-black text-zinc-900">Ubah Status Sampel</h3>
-              <button onClick={() => setStatusModalSample(null)} className="text-zinc-400">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <p className="text-xs text-zinc-500">{statusModalSample.productName}</p>
-
-            <div className="space-y-2">
-              {STATUS_FLOW.map((st) => (
-                <button
-                  key={st}
-                  onClick={() => handleQuickStatusChange(statusModalSample, st)}
-                  className={`w-full flex items-center justify-between p-3 rounded-xl border text-xs font-black transition-all ${
-                    statusModalSample.status === st
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
-                      : 'border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700'
-                  }`}
-                >
-                  <span>{st}</span>
-                  {statusModalSample.status === st && <Check className="h-4 w-4 text-emerald-600" />}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ================= MODAL: DETAIL SAMPEL ================= */}
       {detailSample && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
@@ -2048,17 +2049,35 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                 <strong className="text-zinc-900 font-bold">{detailSample.productName}</strong>
               </div>
               <div className="flex justify-between border-b border-zinc-100 pb-2">
-                <span className="text-zinc-500">Nama Brand:</span>
-                <span className="font-semibold text-zinc-800">{detailSample.brandName || '-'}</span>
-              </div>
-              <div className="flex justify-between border-b border-zinc-100 pb-2">
-                <span className="text-zinc-500">Nama Seller:</span>
-                <span className="font-semibold text-zinc-800">{detailSample.sellerName || '-'}</span>
+                <span className="text-zinc-500">Brand / Toko:</span>
+                <span className="font-semibold text-zinc-800">{detailSample.brandName || detailSample.sellerName || '-'}</span>
               </div>
               <div className="flex justify-between border-b border-zinc-100 pb-2" data-testid="sample-detail-size">
                 <span className="text-zinc-500">Size / Ukuran:</span>
                 <span className="font-semibold text-zinc-800">{detailSample.size || '-'}</span>
               </div>
+              {detailSample.color && (
+                <div className="flex justify-between border-b border-zinc-100 pb-2">
+                  <span className="text-zinc-500">Warna / Varian:</span>
+                  <span className="font-semibold text-zinc-800">{detailSample.color}</span>
+                </div>
+              )}
+              {detailSample.orderNumber && (
+                <div className="flex justify-between border-b border-zinc-100 pb-2">
+                  <span className="text-zinc-500">No. Pesanan:</span>
+                  <span className="font-mono font-bold text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded-md">
+                    {detailSample.orderNumber}
+                  </span>
+                </div>
+              )}
+              {detailSample.paymentMethod && (
+                <div className="flex justify-between border-b border-zinc-100 pb-2">
+                  <span className="text-zinc-500">Metode Pembayaran:</span>
+                  <span className="font-semibold text-zinc-800">
+                    {detailSample.paymentMethod} {detailSample.paymentMethodRaw && detailSample.paymentMethodRaw !== detailSample.paymentMethod ? `(${detailSample.paymentMethodRaw})` : ''}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Status:</span>
                 <strong className="text-emerald-700 font-bold">{detailSample.status}</strong>
@@ -2245,6 +2264,22 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
           } else {
             setSuccessToast(`Master produk "${product.productName}" berhasil disimpan ke Katalog.`);
           }
+        }}
+      />
+
+      {/* ================= MODAL: IMPORT SPREADSHEET (PHASE: IMPORT SPREADSHEET V2) ================= */}
+      <ImportSpreadsheetModal
+        isOpen={isImportSpreadsheetModalOpen}
+        onClose={() => setIsImportSpreadsheetModalOpen(false)}
+        existingSamples={samples}
+        accounts={accounts}
+        employees={employees}
+        currentUserId={userProfile?.uid || 'anonymous'}
+        currentUserName={userProfile?.name || 'User'}
+        defaultScope={isEmployee ? (userProfile?.scope || 'SHARING') : (isInvestor ? 'SHARING' : 'SHARING')}
+        canChooseScope={!isEmployee && !isInvestor}
+        onImportSuccess={({ batchId, successCount }) => {
+          setSuccessToast(`Import ${batchId} sukses! ${successCount} data sampel berhasil dimasukkan ke database.`);
         }}
       />
     </div>

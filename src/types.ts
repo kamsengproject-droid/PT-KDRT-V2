@@ -745,6 +745,21 @@ export interface AffiliateSample {
   sellerName?: string; // Nama Seller/Toko tempat sampel dibeli
   brandName?: string; // Nama Brand produk sampel
   size?: string; // Ukuran / Size sampel (free text: S, M, L, XL, XXL, 3XL, All Size, 42, dll). Boleh kosong.
+  color?: string; // Warna / Varian Warna sampel (e.g. "A-Hitam", "Navy", "Putih")
+  productPriceVal?: number; // Harga Produk Asli dari Spreadsheet / Toko
+  shippingCost?: number; // Biaya Ongkir
+  discount?: number; // Diskon / Voucher
+  totalPaid?: number; // Total Bayar
+  orderNumber?: string; // Nomor Pesanan (STRING digit panjang)
+  paymentMethod?: string; // Kategori metode pembayaran (DANA, COD, TRANSFER, PAYLATER, dll)
+  paymentMethodRaw?: string; // Teks asli metode pembayaran dari spreadsheet
+  sequenceNumber?: number; // Nomor urutan baris spreadsheet
+  source?: 'manual' | 'ai_scan' | 'spreadsheet_import' | string; // Sumber pencatatan sampel
+  importBatchId?: string; // ID Batch import spreadsheet
+  importFileName?: string; // Nama file spreadsheet yang diimport
+  importedAt?: any; // Timestamp saat import
+  importedBy?: string; // User ID yang mengimport
+  importedByName?: string; // Nama User yang mengimport
   sampleImage?: string; // Foto kondisi fisik sampel (BEDA dari productImage / foto produk master)
 
   // Penataan Lokasi Fisik Sampel (Rak / Hanger / Lemari)
@@ -1457,4 +1472,68 @@ export const PT_KDRT_DEFAULT_ACCOUNTS = [
   'BNI PT KDRT',
   'SeaBank PT KDRT',
 ] as const;
+
+// ============================================================================
+// PHASE: IMPORT SPREADSHEET SAMPLE DATABASE PT KDRT V2
+// ============================================================================
+
+export type ImportRowValidationStatus =
+  | 'VALID'
+  | 'WARNING'
+  | 'ERROR'
+  | 'NEEDS_REVIEW'
+  | 'DUPLICATE';
+
+export type DuplicateAction = 'SKIP' | 'UPDATE' | 'IMPORT_ANYWAY';
+
+export interface SpreadsheetSampleRow {
+  rowNumber: number;
+  sequenceNumber: number;
+  sellerName: string;
+  productName: string;
+  color: string;
+  size: string;
+  productPrice: number;
+  shippingCost: number;
+  discount: number;
+  totalPaid: number;
+  orderNumber: string;
+  paymentMethod: string;
+  paymentMethodRaw: string;
+  
+  // Validation status
+  status: ImportRowValidationStatus;
+  validationIssues: string[];
+  
+  // Duplicate resolution
+  duplicateSampleId?: string;
+  duplicateSampleName?: string;
+  duplicateAction: DuplicateAction;
+  
+  // Raw data mapping snapshot
+  rawRowData?: Record<string, any>;
+}
+
+export interface SampleImportLog {
+  id?: string;
+  batchId: string;
+  fileName: string;
+  fileSizeBytes?: number;
+  totalRows: number;
+  successCount: number;
+  duplicateCount: number;
+  warningCount: number;
+  errorCount: number;
+  importedBy: string;
+  importedByName: string;
+  importedAt: any;
+  status: 'SELESAI' | 'SEBAGIAN' | 'GAGAL';
+  scope?: ScopeType;
+  accountId?: string;
+  accountName?: string;
+  employeeId?: string;
+  employeeName?: string;
+  notes?: string;
+}
+
 

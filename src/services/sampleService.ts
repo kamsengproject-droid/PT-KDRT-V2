@@ -360,10 +360,10 @@ export async function updateSample(
       }
     }
 
-    // Synchronize linked dailyTask deterministically (handles PIC transfer, scope changes, target changes)
+    // Synchronize linked dailyTask and Buku Kas & Bank deterministically
     const mergedSample = { ...currentSample, ...payload, id };
 
-    // Task sync and audit log are independent writes to different collections — run in parallel.
+    // Task sync, financial transaction sync, and audit log
     await Promise.all([
       (async () => {
         console.time('[SAMPLE_TASK_SYNC]');
@@ -371,6 +371,13 @@ export async function updateSample(
           await syncSampleToDailyTask(id, mergedSample, currentUserId, currentUserName);
         } finally {
           console.timeEnd('[SAMPLE_TASK_SYNC]');
+        }
+      })(),
+      (async () => {
+        try {
+          await syncSampleFinancialTransaction(id, mergedSample, currentUserId, currentUserName);
+        } catch (txErr: any) {
+          console.warn('[SAMPLE_TX_SYNC_ERROR]', txErr);
         }
       })(),
       catatAuditLog(
@@ -470,7 +477,121 @@ export async function updateSampleContentProgress(
   }
 }
 
-// 6. Record Financial Expense with STRICT Anti-Double-Entry Protection
+// 6. Synchronize Financial Transaction for Buku Kas & Bank (Deterministic ID: SAMPLE_PURCHASE_{sampleId})
+export async function syncSampleFinancialTransaction(
+  sampleId: string,
+  sample: Partial<AffiliateSample>,
+  currentUserId: string,
+  currentUserName: string
+): Promise<void> {
+  try {
+    const deterministicId = `SAMPLE_PURCHASE_${sampleId}`;
+    const amount = Number(sample.totalPaid || sample.totalCost || (Number(sample.samplePrice || 0) * Number(sample.quantity || 1))) || 0;
+    const txRef = doc(db, 'transactions', deterministicId);
+
+    if (amount <= 0) {
+      try {
+        await deleteDoc(txRef);
+      } catch (err) {
+        console.warn('Notice deleting zero-amount sample transaction:', err);
+      }
+      return;
+    }
+
+    let defaultAccount = 'BCA PT KDRT';
+    if (sample.paymentMethod) {
+      const pm = sample.paymentMethod.toUpperCase();
+      if (pm === 'COD') defaultAccount = 'Kas Tunai';
+      else if (pm === 'DANA') defaultAccount = 'DANA';
+      else if (pm === 'TRANSFER') defaultAccount = 'BCA PT KDRT';
+      else if (pm === 'PAYLATER') defaultAccount = 'Paylater';
+    } else if (sample.accountName) {
+      defaultAccount = sample.accountName;
+    }
+
+    const brandDisplay = sample.brandName || sample.sellerName || '';
+    const noteParts: string[] = [];
+    if (brandDisplay) noteParts.push(`Brand: ${brandDisplay}`);
+    if (sample.orderNumber) noteParts.push(`No Pesanan: ${sample.orderNumber}`);
+    if (sample.notes) noteParts.push(sample.notes);
+
+    const txData = {
+      id: deterministicId,
+      transactionId: deterministicId,
+      type: 'EXPENSE',
+      date: sample.purchaseDate || tanggalHariIni(),
+      amount: amount,
+      category: 'Sampel / Inventory',
+      sourceType: 'SAMPLE_PURCHASE',
+      referenceId: sampleId,
+      sampleId: sampleId,
+      productId: sample.productId || null,
+      scope: sample.scope || 'SHARING',
+      accountId: sample.accountId || null,
+      accountName: defaultAccount,
+      employeeId: sample.employeeId || null,
+      employeeName: sample.employeeName || null,
+      description: `Pembelian Sampel - ${sample.productName || 'Produk'}${sample.quantity && sample.quantity > 1 ? ` (${sample.quantity} unit)` : ''}`,
+      notes: noteParts.join(' | ') || null,
+      status: 'ACTIVE',
+      updatedAt: serverTimestamp(),
+      createdBy: currentUserId,
+      createdByName: currentUserName,
+    };
+
+    await setDoc(txRef, txData, { merge: true });
+
+    // Mark sample as expense recorded
+    try {
+      await updateDoc(doc(db, SAMPLES_COLLECTION, sampleId), {
+        expenseId: deterministicId,
+        isExpenseRecorded: true,
+        expenseRecordedAt: serverTimestamp(),
+      });
+    } catch {
+      // ignore if sample doc is being created/deleted
+    }
+  } catch (err) {
+    console.error('[SYNC_SAMPLE_TX_ERROR]', err);
+  }
+}
+
+// Bulk Sync All Existing Samples to Buku Kas & Bank
+export async function syncAllSamplesToFinancialTransactions(
+  currentUserId: string,
+  currentUserName: string
+): Promise<{ syncedCount: number; totalAmount: number }> {
+  try {
+    const snap = await getDocs(collection(db, SAMPLES_COLLECTION));
+    let syncedCount = 0;
+    let totalAmount = 0;
+
+    for (const d of snap.docs) {
+      const sample = { id: d.id, ...d.data() } as AffiliateSample;
+      const amount = Number(sample.totalPaid || sample.totalCost || (Number(sample.samplePrice || 0) * Number(sample.quantity || 1))) || 0;
+      if (amount > 0) {
+        await syncSampleFinancialTransaction(d.id, sample, currentUserId, currentUserName);
+        syncedCount++;
+        totalAmount += amount;
+      }
+    }
+
+    await catatAuditLog(
+      currentUserId,
+      currentUserName,
+      'SAMPLES_SYNCED_TO_FINANCIAL_TRANSACTIONS',
+      'Sinkronisasi Database Sampel',
+      `Berhasil mensinkronkan ${syncedCount} pembelian sampel dengan total Rp ${totalAmount.toLocaleString('id-ID')} ke Buku Kas & Bank.`
+    );
+
+    return { syncedCount, totalAmount };
+  } catch (err) {
+    console.error('[BULK_SYNC_SAMPLES_ERROR]', err);
+    throw err;
+  }
+}
+
+// 7. Record Financial Expense (Legacy compatibility wrapper)
 export async function recordSampleExpense(
   sampleId: string,
   sample: AffiliateSample,
@@ -479,131 +600,19 @@ export async function recordSampleExpense(
   _skipDuplicateCheck: boolean = false
 ): Promise<{ success: boolean; message: string; expenseId?: string }> {
   try {
-    // Check 1: In sample document itself
-    if (sample.isExpenseRecorded && sample.expenseId) {
-      await catatAuditLog(
-        currentUserId,
-        currentUserName,
-        'SAMPLE_EXPENSE_PREVENTED_DUPLICATE',
-        `Sampel: ${sample.productName}`,
-        `Percobaan pencatatan ganda dicegah. Pengeluaran sampel ${sampleId} sudah tercatat di Expense ID: ${sample.expenseId}`
-      );
-      return {
-        success: false,
-        message: 'Pengeluaran sampel ini sudah tercatat.',
-        expenseId: sample.expenseId,
-      };
-    }
-
-    // Check 2: Query Firestore 'expenses' collection for any doc with sampleId.
-    // Keep this check enabled even for fresh creates. It is a cheap read compared with
-    // the cost of allowing a retry to create a second expense after a partial failure.
-    // The flag is retained for API compatibility but intentionally no longer bypasses
-    // the anti-duplicate check.
-    const expensesCol = collection(db, 'expenses');
-    void _skipDuplicateCheck; // retained for backwards-compatible callers; anti-duplicate check is always enforced.
-
-    const q = query(expensesCol, where('sampleId', '==', sampleId));
-    const existingSnap = await getDocs(q);
-
-    if (!existingSnap.empty) {
-      const existingDoc = existingSnap.docs[0];
-      // Update sample reference if not already synced
-      await updateDoc(doc(db, SAMPLES_COLLECTION, sampleId), {
-        expenseId: existingDoc.id,
-        isExpenseRecorded: true,
-        expenseRecordedAt: serverTimestamp(),
-      });
-
-      await catatAuditLog(
-        currentUserId,
-        currentUserName,
-        'SAMPLE_EXPENSE_PREVENTED_DUPLICATE',
-        `Sampel: ${sample.productName}`,
-        `Pengeluaran sampel ${sampleId} sudah ada di database (Expense ID: ${existingDoc.id}). Anti-double-entry aktif.`
-      );
-
-      return {
-        success: false,
-        message: 'Pengeluaran sampel ini sudah tercatat.',
-        expenseId: existingDoc.id,
-      };
-    }
-    // Amount to record
-    const amount = Number(sample.totalCost) > 0 ? Number(sample.totalCost) : Number(sample.samplePrice) * Number(sample.quantity);
-
-    // Create Expense in 'expenses' collection
-    const expensePayload = {
-      date: sample.purchaseDate || tanggalHariIni(),
-      amount: amount,
-      category: 'SAMPEL',
-      scope: sample.scope || 'SHARING',
-      accountId: sample.accountId || null,
-      accountName: sample.accountName || null,
-      employeeId: sample.employeeId || null,
-      employeeName: sample.employeeName || null,
-      sampleId: sampleId,
-      productId: sample.productId || null,
-      description: `Pembelian Sampel: ${sample.productName} (${sample.quantity} unit @ Rp ${Number(sample.samplePrice).toLocaleString('id-ID')})`,
-      createdBy: currentUserId,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-
-    const expenseDocRef = await addDoc(expensesCol, expensePayload);
-
-    // Also add to master transactions collection with deterministic ID for unified ledger
-    await createFinancialTransaction(
-      {
-        type: 'EXPENSE',
-        scope: sample.scope || 'SHARING',
-        amount: amount,
-        date: sample.purchaseDate || tanggalHariIni(),
-        category: 'SAMPEL',
-        sourceType: 'SAMPLE',
-        referenceId: sampleId,
-        accountId: sample.accountId || null,
-        accountName: sample.accountName || null,
-        employeeId: sample.employeeId || null,
-        employeeName: sample.employeeName || null,
-        sampleId: sampleId,
-        productId: sample.productId || null,
-        description: expensePayload.description,
-        createdBy: currentUserId,
-        createdByName: currentUserName,
-      },
-      currentUserId,
-      currentUserName
-    );
-
-    // Update Sample record with expense reference
-    await updateDoc(doc(db, SAMPLES_COLLECTION, sampleId), {
-      expenseId: expenseDocRef.id,
-      isExpenseRecorded: true,
-      expenseRecordedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    await catatAuditLog(
-      currentUserId,
-      currentUserName,
-      'SAMPLE_EXPENSE_CREATED',
-      `Sampel: ${sample.productName}`,
-      `Pengeluaran dicatat: Rp ${amount.toLocaleString('id-ID')} (Expense ID: ${expenseDocRef.id}, Scope: ${sample.scope})`
-    );
-
+    await syncSampleFinancialTransaction(sampleId, sample, currentUserId, currentUserName);
     return {
       success: true,
-      message: `Pengeluaran sampel sebesar Rp ${amount.toLocaleString('id-ID')} berhasil dicatat ke Arus Kas.`,
-      expenseId: expenseDocRef.id,
+      message: 'Pengeluaran sampel berhasil disinkronkan ke Buku Kas & Bank.',
+      expenseId: `SAMPLE_PURCHASE_${sampleId}`,
     };
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    handleFirestoreError(error, OperationType.CREATE, 'transactions');
     throw error;
   }
 }
 
-// 7. Delete Sample
+// 8. Delete Sample (cleanly deletes linked transactions, tasks, and audit log)
 export async function deleteSample(
   id: string,
   currentSample: AffiliateSample,
@@ -614,7 +623,37 @@ export async function deleteSample(
     const docRef = doc(db, SAMPLES_COLLECTION, id);
     await deleteDoc(docRef);
 
-    // Delete deterministic sample task
+    // 1. Delete deterministic transaction from Buku Kas & Bank
+    try {
+      await deleteDoc(doc(db, 'transactions', `SAMPLE_PURCHASE_${id}`));
+      await deleteDoc(doc(db, 'transactions', `SAMPLE_${id}`));
+    } catch (txErr) {
+      console.warn('Notice deleting sample transaction:', txErr);
+    }
+
+    // 2. Query any lingering transactions with referenceId == id
+    try {
+      const qTx = query(collection(db, 'transactions'), where('referenceId', '==', id));
+      const snapTx = await getDocs(qTx);
+      for (const d of snapTx.docs) {
+        await deleteDoc(d.ref);
+      }
+    } catch (err) {
+      console.warn('Notice cleaning transactions:', err);
+    }
+
+    // 3. Query any lingering expenses with sampleId == id
+    try {
+      const qExp = query(collection(db, 'expenses'), where('sampleId', '==', id));
+      const snapExp = await getDocs(qExp);
+      for (const d of snapExp.docs) {
+        await deleteDoc(d.ref);
+      }
+    } catch (err) {
+      console.warn('Notice cleaning expenses:', err);
+    }
+
+    // 4. Delete deterministic sample task
     const taskDocRef = doc(db, 'dailyTasks', `sampleTask_${id}`);
     try {
       await deleteDoc(taskDocRef);
@@ -622,7 +661,7 @@ export async function deleteSample(
       console.warn('Notice deleting sample task:', err);
     }
 
-    // Query any lingering tasks with sampleId == id
+    // 5. Query any lingering tasks with sampleId == id
     try {
       const q = query(collection(db, 'dailyTasks'), where('sampleId', '==', id));
       const snap = await getDocs(q);
@@ -638,7 +677,7 @@ export async function deleteSample(
       currentUserName,
       'SAMPLE_DELETED',
       `Sampel: ${currentSample.productName}`,
-      `Sampel ID ${id} dihapus beserta tugas operasional terkait.`
+      `Sampel ID ${id} dihapus beserta pengeluaran Kas & Bank dan tugas operasional terkait.`
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${SAMPLES_COLLECTION}/${id}`);

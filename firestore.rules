@@ -200,6 +200,11 @@ service cloud.firestore {
       allow write: if isAuthenticated();
     }
 
+    match /sampleImportLogs/{logId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
     match /samples_inventory/{itemId} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated();

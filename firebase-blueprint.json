@@ -207,9 +207,32 @@
         "createdAt": { "type": "string" }
       },
       "required": ["employeeId", "employeeName", "period", "amount", "basis", "status", "createdBy"]
+    },
+    "SampleImportLog": {
+      "title": "SampleImportLog",
+      "description": "Catatan riwayat import spreadsheet Excel data sampel PT.KDRT",
+      "type": "object",
+      "properties": {
+        "batchId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "totalRows": { "type": "number" },
+        "successCount": { "type": "number" },
+        "duplicateCount": { "type": "number" },
+        "warningCount": { "type": "number" },
+        "errorCount": { "type": "number" },
+        "importedBy": { "type": "string" },
+        "importedByName": { "type": "string" },
+        "importedAt": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["batchId", "fileName", "totalRows", "successCount", "importedBy"]
     }
   },
   "firestore": {
+    "/sampleImportLogs/{logId}": {
+      "schema": "SampleImportLog",
+      "description": "Koleksi riwayat log batch import spreadsheet sampel"
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "Koleksi akun profil pengguna"
