@@ -242,13 +242,23 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
   const cameraInputRef = React.useRef<HTMLInputElement>(null);
   const galleryInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Master product photo state for Master Product modal
+  const [productImageFile, setProductImageFile] = useState<File | null>(null);
+  const [productImagePreview, setProductImagePreview] = useState<string>('');
+  const [productImageRemoved, setProductImageRemoved] = useState(false);
+  const productCameraInputRef = React.useRef<HTMLInputElement>(null);
+  const productGalleryInputRef = React.useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     return () => {
       if (sampleImagePreview.startsWith('blob:')) {
         URL.revokeObjectURL(sampleImagePreview);
       }
+      if (productImagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(productImagePreview);
+      }
     };
-  }, [sampleImagePreview]);
+  }, [sampleImagePreview, productImagePreview]);
 
   // Output progress modal
   const [progressModalSample, setProgressModalSample] = useState<AffiliateSample | null>(null);
@@ -350,7 +360,10 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
         const matchPic = s.employeeName?.toLowerCase().includes(q);
         const matchBrand = s.brandName?.toLowerCase().includes(q);
         const matchLoc = s.locationCode?.toLowerCase().includes(q) || s.locationName?.toLowerCase().includes(q);
-        if (!matchName && !matchPic && !matchBrand && !matchLoc) return false;
+        const matchSeller = (s as any).sellerName?.toLowerCase().includes(q);
+        const matchOrder = (s as any).orderNumber?.toLowerCase().includes(q);
+        const matchNotes = s.notes?.toLowerCase().includes(q);
+        if (!matchName && !matchAcc && !matchPic && !matchBrand && !matchLoc && !matchSeller && !matchOrder && !matchNotes) return false;
       }
       return true;
     });
@@ -466,6 +479,9 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       status: 'AKTIF',
       notes: '',
     });
+    setProductImageFile(null);
+    setProductImagePreview('');
+    setProductImageRemoved(false);
     setIsProductModalOpen(true);
   };
 
@@ -475,7 +491,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       productName: prod.productName,
       productPrice: prod.productPrice || '',
       productUrl: prod.productUrl || '',
-      productImage: prod.productImage || '',
+      productImage: prod.productImage || (prod as any).photoUrl || '',
       commissionRate: prod.commissionRate || 10,
       accountIds: prod.accountIds || [],
       category: prod.category || (isSharingEmployee ? 'Fashion Kaos' : 'Skincare & Kecantikan'),
@@ -483,6 +499,9 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       status: prod.status || 'AKTIF',
       notes: prod.notes || '',
     });
+    setProductImageFile(null);
+    setProductImagePreview(prod.productImage || (prod as any).photoUrl || '');
+    setProductImageRemoved(false);
     setIsProductModalOpen(true);
   };
 
@@ -536,12 +555,13 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
     const price = Number(prod.productPrice) || 0;
     const isSharingEmployee = isEmployee && userProfile?.scope === 'SHARING';
     const selfEmployeeId = (employeeProfile as any)?.employeeId || employeeProfile?.id || '';
+    const prodImg = prod.productImage || (prod as any).photoUrl || '';
 
     setSampleFormData({
       productId: prod.id || prod.productId || '',
       productName: prod.productName,
       productUrl: prod.productUrl || '',
-      productImage: prod.productImage || '',
+      productImage: prodImg,
       samplePrice: price,
       purchaseDate: tanggalHariIni(),
       quantity: '',
@@ -564,18 +584,19 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       locationName: '',
     });
     setSampleImageFile(null);
-    setSampleImagePreview('');
+    setSampleImagePreview(prodImg);
     setSampleImageRemoved(false);
     setIsSampleModalOpen(true);
   };
 
   const handleOpenEditSample = (sample: AffiliateSample) => {
     setEditingSample(sample);
+    const sampleImg = sample.sampleImage || sample.productImage || (sample as any).photoUrl || '';
     setSampleFormData({
       productId: sample.productId || '',
       productName: sample.productName,
       productUrl: sample.productUrl || '',
-      productImage: sample.productImage || '',
+      productImage: sample.productImage || sampleImg,
       samplePrice: sample.samplePrice || 0,
       purchaseDate: sample.purchaseDate || tanggalHariIni(),
       quantity: sample.quantity || 1,
@@ -598,7 +619,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       locationName: sample.locationName || '',
     });
     setSampleImageFile(null);
-    setSampleImagePreview(sample.sampleImage || '');
+    setSampleImagePreview(sampleImg);
     setSampleImageRemoved(false);
     setIsSampleModalOpen(true);
   };
@@ -616,12 +637,16 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
     if (found) {
       const price = Number(found.productPrice) || 0;
       const qty = sampleFormData.quantity || 1;
+      const prodImg = found.productImage || (found as any).photoUrl || '';
+      if (prodImg && !sampleImageFile) {
+        setSampleImagePreview(prodImg);
+      }
       setSampleFormData((prev) => ({
         ...prev,
         productId: found.id || found.productId || '',
         productName: found.productName,
         productUrl: found.productUrl || '',
-        productImage: found.productImage || '',
+        productImage: prodImg,
         samplePrice: price,
         totalCost: price * qty,
         scope: found.scope || prev.scope,
@@ -642,11 +667,40 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       const uid = userProfile?.uid || currentUser?.uid || 'system';
       const name = userProfile?.name || currentUser?.displayName || 'User';
 
+      let finalPhotoUrl = productFormData.productImage;
+      if (productImageRemoved) {
+        finalPhotoUrl = '';
+      }
+
       if (editingProduct?.id) {
-        await updateProduct(editingProduct.id, editingProduct, { ...productFormData, productPrice: Number(productFormData.productPrice) || 0, commissionRate: Number(productFormData.commissionRate) || 0 }, null, uid, name);
+        await updateProduct(
+          editingProduct.id,
+          editingProduct,
+          {
+            ...productFormData,
+            productPrice: Number(productFormData.productPrice) || 0,
+            commissionRate: Number(productFormData.commissionRate) || 0,
+            productImage: finalPhotoUrl,
+            photoUrl: finalPhotoUrl,
+          },
+          productImageFile,
+          uid,
+          name
+        );
         setSuccessToast(`Master produk "${productFormData.productName}" berhasil diperbarui.`);
       } else {
-        await createProduct({ ...productFormData, productPrice: Number(productFormData.productPrice) || 0, commissionRate: Number(productFormData.commissionRate) || 0 }, null, uid, name);
+        await createProduct(
+          {
+            ...productFormData,
+            productPrice: Number(productFormData.productPrice) || 0,
+            commissionRate: Number(productFormData.commissionRate) || 0,
+            productImage: finalPhotoUrl,
+            photoUrl: finalPhotoUrl,
+          },
+          productImageFile,
+          uid,
+          name
+        );
         setSuccessToast(`Master produk "${productFormData.productName}" berhasil ditambahkan.`);
       }
       setIsProductModalOpen(false);
@@ -676,14 +730,15 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
       // Sample photo: upload ONLY here (on Save click), ONLY if the user picked a
       // new file (camera or gallery) in this session. If editing and the photo
-      // wasn't touched, we don't include `sampleImage` in the payload at all, so
-      // updateDoc leaves the existing Storage URL untouched (no re-upload).
+      // wasn't touched, we preserve the existing photo URL.
       let sampleImageUrl: string | undefined = undefined;
       if (sampleImageFile) {
         const tempId = editingSample?.id || `temp_${Date.now()}`;
         sampleImageUrl = await uploadSampleImage(sampleImageFile, tempId);
       } else if (sampleImageRemoved) {
         sampleImageUrl = '';
+      } else if (sampleFormData.productImage) {
+        sampleImageUrl = sampleFormData.productImage;
       }
 
       const payload: any = {
@@ -693,6 +748,8 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       };
       if (sampleImageUrl !== undefined) {
         payload.sampleImage = sampleImageUrl;
+        payload.productImage = sampleImageUrl;
+        payload.photoUrl = sampleImageUrl;
       }
 
       if (editingSample?.id) {
@@ -948,7 +1005,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setActiveTab('SAMPEL')}
-            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-all ${
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-all cursor-pointer ${
               activeTab === 'SAMPEL'
                 ? 'bg-zinc-900 text-white shadow-xs'
                 : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
@@ -960,7 +1017,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
           <button
             onClick={() => setActiveTab('MASTER_PRODUK')}
-            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-all ${
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-all cursor-pointer ${
               activeTab === 'MASTER_PRODUK'
                 ? 'bg-zinc-900 text-white shadow-xs'
                 : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
@@ -971,78 +1028,163 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
           </button>
         </div>
 
-        {/* Filter & Search Bar */}
-        <div className="flex flex-wrap items-center gap-2">
-          {!isInvestor && (
-            <div className="flex items-center bg-zinc-100 rounded-xl p-1 text-xs">
-              <button
-                onClick={() => setScopeFilter('SEMUA')}
-                className={`rounded-lg px-2.5 py-1 font-bold ${
-                  scopeFilter === 'SEMUA' ? 'bg-white text-zinc-900 shadow-2xs' : 'text-zinc-500'
-                }`}
-              >
-                Semua
-              </button>
-              <button
-                onClick={() => setScopeFilter('SHARING')}
-                className={`rounded-lg px-2.5 py-1 font-bold ${
-                  scopeFilter === 'SHARING' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-zinc-500'
-                }`}
-              >
-                Sharing
-              </button>
-              <button
-                onClick={() => setScopeFilter('PRIBADI')}
-                className={`rounded-lg px-2.5 py-1 font-bold ${
-                  scopeFilter === 'PRIBADI' ? 'bg-blue-600 text-white shadow-2xs' : 'text-zinc-500'
-                }`}
-              >
-                Pribadi
-              </button>
-            </div>
-          )}
-
-          {activeTab === 'SAMPEL' && locations.length > 0 && (
-            <div className="flex items-center gap-1.5 bg-white border border-zinc-200 rounded-xl px-2.5 py-1 text-xs shadow-2xs">
-              <MapPin className="h-3.5 w-3.5 text-indigo-600" />
-              <select
-                value={locationFilter}
-                onChange={(e) => setLocationFilter(e.target.value)}
-                className="bg-transparent text-xs font-bold text-zinc-700 focus:outline-hidden cursor-pointer"
-              >
-                <option value="SEMUA">Semua Lokasi</option>
-                <option value="BELUM_DITATA">⚠️ Belum Ditata</option>
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.kodeLokasi}>
-                    📍 {loc.kodeLokasi} ({loc.namaLokasi})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div className="relative min-w-[200px] flex-1 sm:flex-initial">
-            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-400" />
-            <input
-              type="text"
-              placeholder="Cari produk / PIC / akun..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-xl border border-zinc-200 bg-white pl-9 pr-3 py-1.5 text-xs text-zinc-800 placeholder-zinc-400 focus:outline-emerald-500"
-            />
-          </div>
+        {/* Info label on tab bar */}
+        <div className="text-[11px] font-bold text-zinc-500 hidden sm:block">
+          {activeTab === 'SAMPEL' ? '🎨 Galeri Sampel Fisik & Progres Konten' : '📦 Master Katalog Produk'}
         </div>
       </div>
 
       {/* Main Content Area */}
       {activeTab === 'SAMPEL' ? (
-        <div className="space-y-4">
+        <div className="space-y-6">
+          {/* ================= BAR PENCARIAN & FILTER SAMPEL (Tepat di Atas Kolom Sampel) ================= */}
+          <div className="bg-gradient-to-br from-zinc-900 via-slate-900 to-zinc-900 border border-zinc-800 rounded-3xl p-4 sm:p-5 text-white shadow-xl space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <Search className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-black text-white tracking-tight flex items-center gap-2 uppercase">
+                    Pencarian Cepat Sampel
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Cari produk untuk dibuat konten, lalu klik foto produk untuk langsung update progres VT.
+                  </p>
+                </div>
+              </div>
+
+              {/* Status counter pill */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-zinc-300 bg-zinc-800/80 border border-zinc-700/60 px-3 py-1 rounded-xl">
+                  🟢 <strong className="text-amber-400">{newSamples.length}</strong> Belum Konten • ✅ <strong className="text-emerald-400">{oldSamples.length}</strong> Target Tercapai
+                </span>
+              </div>
+            </div>
+
+            {/* Input Pencarian & Filter Dropdown */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
+              {/* Input Text Box */}
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-400 pointer-events-none" />
+                <input
+                  id="input-cari-sampel-utama"
+                  type="text"
+                  placeholder="Ketik nama produk, brand, PIC kreator, akun medsos, seller, lokasi..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full rounded-2xl border border-zinc-700 bg-zinc-950/90 pl-10 pr-10 py-2.5 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-hidden focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-medium"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+                    title="Hapus pencarian"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Filter Scope & Lokasi */}
+              <div className="flex flex-wrap items-center gap-2">
+                {!isInvestor && (
+                  <div className="flex items-center bg-zinc-950/90 border border-zinc-700 rounded-2xl p-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setScopeFilter('SEMUA')}
+                      className={`rounded-xl px-3 py-1.5 font-black transition-all cursor-pointer ${
+                        scopeFilter === 'SEMUA' ? 'bg-zinc-800 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      Semua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScopeFilter('SHARING')}
+                      className={`rounded-xl px-3 py-1.5 font-black transition-all cursor-pointer ${
+                        scopeFilter === 'SHARING' ? 'bg-emerald-600 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      Sharing
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScopeFilter('PRIBADI')}
+                      className={`rounded-xl px-3 py-1.5 font-black transition-all cursor-pointer ${
+                        scopeFilter === 'PRIBADI' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      Pribadi
+                    </button>
+                  </div>
+                )}
+
+                {locations.length > 0 && (
+                  <div className="flex items-center gap-1.5 bg-zinc-950/90 border border-zinc-700 rounded-2xl px-3 py-2 text-xs">
+                    <MapPin className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                    <select
+                      value={locationFilter}
+                      onChange={(e) => setLocationFilter(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-zinc-200 focus:outline-hidden cursor-pointer"
+                    >
+                      <option value="SEMUA" className="bg-zinc-900 text-white">Semua Lokasi</option>
+                      <option value="BELUM_DITATA" className="bg-zinc-900 text-amber-400">⚠️ Belum Ditata</option>
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.kodeLokasi} className="bg-zinc-900 text-white">
+                          📍 {loc.kodeLokasi} ({loc.namaLokasi})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Active filter notification if any */}
+            {(searchQuery || scopeFilter !== 'SEMUA' || locationFilter !== 'SEMUA') && (
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-800/80 text-[11px] text-zinc-400">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-semibold text-zinc-400">Filter Aktif:</span>
+                  {searchQuery && (
+                    <span className="bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 font-bold px-2 py-0.5 rounded-lg">
+                      "{searchQuery}"
+                    </span>
+                  )}
+                  {scopeFilter !== 'SEMUA' && (
+                    <span className="bg-zinc-800 border border-zinc-700 text-zinc-200 font-bold px-2 py-0.5 rounded-lg">
+                      Scope: {scopeFilter}
+                    </span>
+                  )}
+                  {locationFilter !== 'SEMUA' && (
+                    <span className="bg-indigo-950 border border-indigo-700 text-indigo-300 font-bold px-2 py-0.5 rounded-lg">
+                      Lokasi: {locationFilter}
+                    </span>
+                  )}
+                  <span className="text-zinc-500">({filteredSamples.length} ditemukan)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setScopeFilter('SEMUA');
+                    setLocationFilter('SEMUA');
+                  }}
+                  className="text-xs font-bold text-rose-400 hover:text-rose-300 underline cursor-pointer shrink-0"
+                >
+                  Reset Filter
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Mobile Tab Switcher: Hanya BELUM SELESAI & SELESAI di mobile */}
           <div className="flex lg:hidden items-center p-1 bg-zinc-100 rounded-2xl border border-zinc-200 gap-1.5">
             <button
               type="button"
               onClick={() => setMobileSampleTab('BELUM_SELESAI')}
-              className={`flex-1 py-2.5 px-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-2.5 px-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                 mobileSampleTab === 'BELUM_SELESAI'
                   ? 'bg-amber-500 text-white shadow-xs'
                   : 'text-zinc-600 hover:text-zinc-900 bg-white/60'
@@ -1056,7 +1198,7 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
             <button
               type="button"
               onClick={() => setMobileSampleTab('SELESAI')}
-              className={`flex-1 py-2.5 px-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-2.5 px-3 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                 mobileSampleTab === 'SELESAI'
                   ? 'bg-zinc-800 text-white shadow-xs'
                   : 'text-zinc-600 hover:text-zinc-900 bg-white/60'
@@ -1073,157 +1215,229 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* KOLOM 1: BELUM DIBUAT KONTEN / PROSES BERJALAN */}
             <div className={`space-y-4 ${mobileSampleTab === 'SELESAI' ? 'hidden lg:block' : 'block'}`}>
-              <div className="flex items-center justify-between bg-amber-50/70 border border-amber-200 rounded-2xl px-4 py-3">
+              <div className="flex items-center justify-between bg-amber-50/80 border border-amber-200/90 rounded-2xl px-4 py-3 shadow-2xs">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-amber-500 animate-pulse" />
-                  <h2 className="font-black text-sm text-zinc-900 tracking-tight">
-                    BELUM DIBUAT KONTEN (PROSES BERJALAN)
-                  </h2>
+                  <div>
+                    <h2 className="font-black text-sm text-zinc-900 tracking-tight">
+                      BELUM DIBUAT KONTEN (PROSES BERJALAN)
+                    </h2>
+                    <p className="text-[10px] text-amber-800 font-medium">
+                      Klik foto produk untuk membuka & update penyelesaian VT.
+                    </p>
+                  </div>
                 </div>
-                <span className="rounded-full bg-amber-200/80 px-2.5 py-0.5 text-xs font-black text-amber-900">
+                <span className="rounded-full bg-amber-200/90 px-3 py-1 text-xs font-black text-amber-950 shrink-0">
                   {newSamples.length} Item
                 </span>
               </div>
 
             {newSamples.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 p-8 text-center text-xs text-zinc-400">
-                Semua sampel sudah memenuhi target konten VT.
+              <div className="rounded-3xl border border-dashed border-zinc-200 bg-zinc-50/50 p-10 text-center text-xs text-zinc-400 space-y-2">
+                <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto" />
+                <p className="font-bold text-zinc-700">Semua sampel sudah memenuhi target konten VT!</p>
+                <p className="text-[11px] text-zinc-400">Tidak ada sampel yang menunggu pembuatan konten.</p>
               </div>
             ) : (
-              <div className="space-y-3">
+              /* Product Gallery Grid */
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {newSamples.map((sample) => {
                   const target = Number(sample.targetContent) || 1;
                   const current = Number(sample.completedContent) || 0;
                   const percent = Math.min(100, Math.round((current / target) * 100));
+                  const photo = sample.sampleImage || sample.productImage || (sample as any).photoUrl;
 
                   return (
                     <div
                       key={sample.id}
-                      className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-2xs hover:border-emerald-300 transition-all space-y-3"
+                      className="group flex flex-col rounded-3xl border border-zinc-200 bg-white overflow-hidden shadow-2xs hover:shadow-lg hover:border-emerald-400 transition-all duration-200"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {sample.productImage ? (
-                            <img
-                              src={sample.productImage}
-                              alt={sample.productName}
-                              className="h-12 w-12 rounded-xl object-cover border border-zinc-200 shrink-0"
-                            />
-                          ) : (
-                            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-400 shrink-0 font-bold text-xs">
-                              <Package className="h-6 w-6" />
-                            </div>
-                          )}
+                      {/* Foto Produk Dominan (Klik foto untuk langsung buka progress/update VT) */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setProgressModalSample(sample);
+                          setNewCompletedCount(sample.completedContent || 0);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            setProgressModalSample(sample);
+                            setNewCompletedCount(sample.completedContent || 0);
+                          }
+                        }}
+                        title="Klik foto untuk update progres VT"
+                        className="relative h-48 sm:h-52 w-full bg-zinc-900 cursor-pointer overflow-hidden select-none"
+                      >
+                        {photo ? (
+                          <img
+                            src={photo}
+                            alt={sample.productName}
+                            referrerPolicy="no-referrer"
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-108"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-900 text-zinc-500 p-4 text-center">
+                            <Package className="h-10 w-10 text-zinc-600 mb-1 group-hover:text-emerald-400 transition-colors" />
+                            <span className="text-[11px] font-bold text-zinc-400">Belum ada foto</span>
+                          </div>
+                        )}
 
-                          <div className="min-w-0">
-                            <h3 className="font-bold text-sm text-zinc-900 truncate">
-                              {sample.productName}
-                            </h3>
-                            <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] text-zinc-500">
-                              <span>Tgl: {formatTanggal(sample.purchaseDate)}</span>
-                              <span>•</span>
-                              <span>{sample.accountName || 'Akun -'}</span>
-                              <span>•</span>
-                              <span className="font-semibold text-zinc-700">PIC: {sample.employeeName || '-'}</span>
-                              {sample.brandName && (
-                                <>
-                                  <span>•</span>
-                                  <span className="font-medium text-zinc-600">Brand: {sample.brandName}</span>
-                                </>
-                              )}
-                              <span>•</span>
-                              {sample.locationCode ? (
-                                <span className="inline-flex items-center gap-0.5 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
-                                  <MapPin className="h-3 w-3" />
-                                  {sample.locationCode}
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-0.5 rounded-md bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
-                                  Belum Ditata
-                                </span>
-                              )}
+                        {/* Gradient Overlay for Badges & Legibility */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-black/40 pointer-events-none" />
+
+                        {/* Top Badges */}
+                        <div className="absolute top-2.5 inset-x-2.5 flex items-center justify-between gap-1 pointer-events-none">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span
+                              className={`rounded-lg px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shadow-sm ${
+                                sample.scope === 'SHARING'
+                                  ? 'bg-emerald-500 text-white'
+                                  : 'bg-blue-600 text-white'
+                              }`}
+                            >
+                              {sample.scope}
+                            </span>
+                            {sample.locationCode ? (
+                              <span className="inline-flex items-center gap-0.5 rounded-lg bg-indigo-600/90 text-white backdrop-blur-xs px-2 py-0.5 text-[10px] font-bold shadow-sm">
+                                <MapPin className="h-3 w-3" />
+                                {sample.locationCode}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-0.5 rounded-lg bg-amber-500/90 text-white backdrop-blur-xs px-2 py-0.5 text-[9px] font-bold shadow-sm">
+                                Belum Ditata
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Target VT Badge */}
+                          <span className="inline-flex items-center gap-1 rounded-lg bg-orange-600/95 text-white backdrop-blur-xs px-2.5 py-0.5 text-[11px] font-black shadow-md border border-orange-400/40">
+                            <PlayCircle className="h-3.5 w-3.5" />
+                            {current}/{target} {sample.unitContent || 'VT'}
+                          </span>
+                        </div>
+
+                        {/* Center Hover Action Hint */}
+                        <div className="absolute bottom-2.5 inset-x-2.5 flex items-center justify-center opacity-90 group-hover:opacity-100 transition-opacity pointer-events-none">
+                          <span className="inline-flex items-center gap-1.5 rounded-xl bg-black/70 group-hover:bg-orange-600 text-white px-3 py-1 text-[11px] font-black backdrop-blur-md shadow-lg border border-white/10 group-hover:border-orange-400/50 transition-all">
+                            <PlayCircle className="h-3.5 w-3.5 text-orange-400 group-hover:text-white" />
+                            <span>Klik Foto → Update VT ({percent}%)</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Card Body */}
+                      <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                        <div className="space-y-2">
+                          {/* Nama Produk (Judul Utama) */}
+                          <h3
+                            onClick={() => {
+                              setProgressModalSample(sample);
+                              setNewCompletedCount(sample.completedContent || 0);
+                            }}
+                            title={sample.productName}
+                            className="font-black text-sm text-zinc-900 group-hover:text-emerald-700 transition-colors line-clamp-2 leading-snug cursor-pointer"
+                          >
+                            {sample.productName}
+                          </h3>
+
+                          {/* Info Badges & Detail Grid */}
+                          <div className="space-y-1.5 text-[11px] text-zinc-600 bg-zinc-50 rounded-2xl p-2.5 border border-zinc-100">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-zinc-500 font-medium">Brand:</span>
+                              <span className="font-bold text-zinc-800 truncate max-w-[140px]">
+                                {sample.brandName || <span className="text-zinc-400 italic">Tanpa Brand</span>}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-zinc-500 font-medium">Akun:</span>
+                              <span className="font-bold text-indigo-700 truncate max-w-[140px]">
+                                {sample.accountName || 'Akun -'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-zinc-500 font-medium">PIC:</span>
+                              <span className="font-black text-zinc-900 truncate max-w-[140px]">
+                                {sample.employeeName || '-'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1 pt-1 border-t border-zinc-200/60 text-[10px]">
+                              <span className="text-zinc-400">Tgl Beli:</span>
+                              <span className="font-medium text-zinc-600">{formatTanggal(sample.purchaseDate)}</span>
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <span
-                            className={`rounded-md px-1.5 py-0.5 text-[9px] font-extrabold ${
-                              sample.scope === 'SHARING'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-blue-50 text-blue-700 border border-blue-200'
-                            }`}
-                          >
-                            {sample.scope}
-                          </span>
+                        {/* Progress Bar VT */}
+                        <div className="space-y-1.5 bg-orange-50/70 rounded-2xl p-2.5 border border-orange-200/80">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[11px] font-bold text-orange-950">
+                              Progress Konten ({sample.unitContent || 'VT'}):
+                            </span>
+                            <span className="font-black text-orange-900">
+                              {current} / {target} ({percent}%)
+                            </span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-orange-200/70 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                percent >= 100 ? 'bg-emerald-500' : 'bg-orange-500'
+                              }`}
+                              style={{ width: `${percent}%` }}
+                            />
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Progress Output VT Bar */}
-                      <div className="bg-zinc-50 rounded-xl p-2.5 border border-zinc-100 space-y-1.5 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-zinc-600">
-                            Progress Konten ({sample.unitContent || 'VT'}):
-                          </span>
-                          <span className="font-black text-zinc-900">
-                            {current} / {target} {sample.unitContent || 'VT'} ({percent}%)
-                          </span>
-                        </div>
-                        <div className="h-2 w-full rounded-full bg-zinc-200 overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              percent >= 100 ? 'bg-emerald-500' : 'bg-orange-500'
-                            }`}
-                            style={{ width: `${percent}%` }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Action buttons */}
-                      <div className="flex items-center justify-between pt-1 border-t border-zinc-100 text-xs">
-                        {!isInvestor ? (
-                          <div className="flex items-center gap-2">
+                        {/* Card Footer Actions */}
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-100 gap-2">
+                          {!isInvestor ? (
                             <button
+                              type="button"
                               onClick={() => {
                                 setProgressModalSample(sample);
                                 setNewCompletedCount(sample.completedContent || 0);
                               }}
-                              className="rounded-lg bg-orange-50 border border-orange-200 px-2.5 py-1 text-[11px] font-bold text-orange-700 hover:bg-orange-100 transition-colors"
+                              className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 active:scale-95 text-white px-3 py-2 text-xs font-black shadow-xs transition-all cursor-pointer"
                             >
-                              + Update VT
+                              <PlayCircle className="h-4 w-4" />
+                              <span>Update VT</span>
                             </button>
-                          </div>
-                        ) : (
-                          <div className="text-[11px] font-medium text-zinc-400">
-                            Mode Investor (Hanya Lihat)
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => setDetailSample(sample)}
-                            className="rounded-lg px-2 py-1 text-[11px] font-semibold text-zinc-500 hover:bg-zinc-100"
-                          >
-                            Detail
-                          </button>
-                          {!isInvestor && (
-                            <>
-                              <button
-                                onClick={() => handleOpenEditSample(sample)}
-                                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
-                              >
-                                <Edit2 className="h-3.5 w-3.5" />
-                              </button>
-                              {isOwner && (
-                                <button
-                                  onClick={() => handleDeleteSample(sample)}
-                                  className="rounded-lg p-1 text-rose-400 hover:bg-rose-50 hover:text-rose-600"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </>
+                          ) : (
+                            <span className="text-[10px] font-bold text-zinc-400">Mode Investor</span>
                           )}
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setDetailSample(sample)}
+                              title="Lihat detail lengkap sampel"
+                              className="rounded-xl px-2.5 py-2 text-xs font-bold text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors cursor-pointer"
+                            >
+                              Detail
+                            </button>
+                            {!isInvestor && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditSample(sample)}
+                                  title="Edit data sampel"
+                                  className="rounded-xl p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 transition-colors cursor-pointer"
+                                >
+                                  <Edit2 className="h-3.5 w-3.5" />
+                                </button>
+                                {isOwner && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSample(sample)}
+                                    title="Hapus sampel"
+                                    className="rounded-xl p-2 text-rose-400 hover:bg-rose-50 hover:text-rose-600 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1235,106 +1449,162 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
           {/* KOLOM 2: TOTAL SELESAI / TARGET TERPENUHI */}
           <div className={`space-y-4 ${mobileSampleTab === 'BELUM_SELESAI' ? 'hidden lg:block' : 'block'}`}>
-            <div className="flex items-center justify-between bg-zinc-100 border border-zinc-200 rounded-2xl px-4 py-3">
+            <div className="flex items-center justify-between bg-zinc-100 border border-zinc-200 rounded-2xl px-4 py-3 shadow-2xs">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                <h2 className="font-black text-sm text-zinc-900 tracking-tight">
-                  TOTAL SELESAI (TARGET TERPENUHI)
-                </h2>
+                <div>
+                  <h2 className="font-black text-sm text-zinc-900 tracking-tight">
+                    TOTAL SELESAI (TARGET TERPENUHI)
+                  </h2>
+                  <p className="text-[10px] text-zinc-500 font-medium">
+                    Sampel yang seluruh target konten VT-nya telah terselesaikan.
+                  </p>
+                </div>
               </div>
-              <span className="rounded-full bg-zinc-200 px-2.5 py-0.5 text-xs font-black text-zinc-700">
+              <span className="rounded-full bg-zinc-200 px-3 py-1 text-xs font-black text-zinc-700 shrink-0">
                 {oldSamples.length} Item
               </span>
             </div>
 
             {oldSamples.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 p-8 text-center text-xs text-zinc-400">
+              <div className="rounded-3xl border border-dashed border-zinc-200 bg-zinc-50/50 p-10 text-center text-xs text-zinc-400">
                 Belum ada sampel yang memenuhi target konten.
               </div>
             ) : (
-              <div className="space-y-3">
-                {oldSamples.map((sample) => (
-                  <div
-                    key={sample.id}
-                    className="rounded-2xl border border-zinc-200 bg-zinc-50/50 p-4 shadow-2xs space-y-2 opacity-90 hover:opacity-100 transition-opacity"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        {sample.productImage ? (
+              /* Product Gallery Grid Selesai */
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {oldSamples.map((sample) => {
+                  const photo = sample.sampleImage || sample.productImage || (sample as any).photoUrl;
+                  const target = Number(sample.targetContent) || 1;
+                  const current = Number(sample.completedContent) || target;
+
+                  return (
+                    <div
+                      key={sample.id}
+                      className="group flex flex-col rounded-3xl border border-zinc-200 bg-zinc-50/60 overflow-hidden shadow-2xs hover:shadow-md hover:border-emerald-300 transition-all opacity-95 hover:opacity-100"
+                    >
+                      {/* Foto Produk */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setProgressModalSample(sample);
+                          setNewCompletedCount(sample.completedContent || 0);
+                        }}
+                        title="Klik foto untuk melihat / ubah progress"
+                        className="relative h-44 sm:h-48 w-full bg-zinc-900 cursor-pointer overflow-hidden"
+                      >
+                        {photo ? (
                           <img
-                            src={sample.productImage}
+                            src={photo}
                             alt={sample.productName}
-                            className="h-10 w-10 rounded-xl object-cover border border-zinc-200 shrink-0 grayscale"
+                            referrerPolicy="no-referrer"
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                           />
                         ) : (
-                          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-200 text-zinc-500 shrink-0 font-bold text-xs">
-                            <Package className="h-5 w-5" />
+                          <div className="flex h-full w-full flex-col items-center justify-center bg-zinc-800 text-zinc-500">
+                            <Package className="h-8 w-8 text-zinc-600 mb-1" />
+                            <span className="text-[10px] font-bold text-zinc-400">Foto tidak tersedia</span>
                           </div>
                         )}
-                        <div className="min-w-0">
-                          <h3 className="font-bold text-sm text-zinc-800 truncate">
-                            {sample.productName}
-                          </h3>
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-                            <span>{formatTanggal(sample.purchaseDate)}</span>
-                            <span>•</span>
-                            <span>{sample.accountName || 'Akun -'}</span>
-                            <span>•</span>
-                            <span>PIC: {sample.employeeName || '-'}</span>
-                            {sample.brandName && (
-                              <>
-                                <span>•</span>
-                                <span className="font-medium text-zinc-600">Brand: {sample.brandName}</span>
-                              </>
-                            )}
-                            <span>•</span>
-                            {sample.locationCode ? (
-                              <span className="inline-flex items-center gap-0.5 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
-                                <MapPin className="h-3 w-3" />
-                                {sample.locationCode}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-0.5 rounded-md bg-zinc-200 px-1.5 py-0.5 text-[9px] font-bold text-zinc-600">
-                                Belum Ditata
-                              </span>
-                            )}
-                          </div>
+
+                        {/* Gradient Overlay */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/30 pointer-events-none" />
+
+                        {/* Badges on Photo */}
+                        <div className="absolute top-2.5 inset-x-2.5 flex items-center justify-between gap-1 pointer-events-none">
+                          <span className="rounded-lg bg-emerald-600 text-white px-2 py-0.5 text-[9px] font-black uppercase">
+                            {sample.scope}
+                          </span>
+                          <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-600/95 text-white backdrop-blur-xs px-2 py-0.5 text-[10px] font-black shadow-sm">
+                            <Check className="h-3 w-3" /> SELESAI
+                          </span>
+                        </div>
+
+                        <div className="absolute bottom-2 inset-x-2 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                          <span className="rounded-xl bg-black/80 text-white px-2.5 py-1 text-[10px] font-bold backdrop-blur-xs border border-white/10">
+                            🔍 Klik untuk Detail / Ubah VT
+                          </span>
                         </div>
                       </div>
 
-                      <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[10px] font-black flex items-center gap-1">
-                          <Check className="h-3 w-3" /> TARGET TERCAPAI
-                        </span>
-                        <span className="text-[10px] font-bold text-zinc-600">
-                          {sample.completedContent}/{sample.targetContent} {sample.unitContent || 'VT'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-zinc-200 text-xs">
-                      <span className="text-[11px] text-zinc-400">
-                        {!isEmployee ? `Biaya: ${formatRupiah(sample.totalPaid || sample.totalCost || 0)}` : `Tanggal: ${formatTanggal(sample.purchaseDate)}`}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setDetailSample(sample)}
-                          className="rounded-lg px-2 py-1 text-[11px] font-semibold text-zinc-600 hover:bg-zinc-200"
-                        >
-                          Detail
-                        </button>
-                        {!isInvestor && (
-                          <button
-                            onClick={() => handleOpenEditSample(sample)}
-                            className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
+                      {/* Card Body */}
+                      <div className="p-3.5 flex-1 flex flex-col justify-between space-y-2.5">
+                        <div>
+                          <h3
+                            onClick={() => setDetailSample(sample)}
+                            title={sample.productName}
+                            className="font-bold text-xs sm:text-sm text-zinc-900 line-clamp-2 leading-snug cursor-pointer hover:text-emerald-700"
                           >
-                            <Edit2 className="h-3.5 w-3.5" />
+                            {sample.productName}
+                          </h3>
+
+                          <div className="mt-2 space-y-1 text-[11px] text-zinc-600 bg-white/80 rounded-xl p-2 border border-zinc-200/60">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-zinc-400">PIC:</span>
+                              <span className="font-bold text-zinc-800 truncate">{sample.employeeName || '-'}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-zinc-400">Akun:</span>
+                              <span className="font-semibold text-indigo-700 truncate">{sample.accountName || '-'}</span>
+                            </div>
+                            {sample.brandName && (
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-zinc-400">Brand:</span>
+                                <span className="font-medium text-zinc-700 truncate">{sample.brandName}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Progress complete indicator */}
+                        <div className="bg-emerald-50 rounded-xl p-2 border border-emerald-200/80 flex items-center justify-between text-xs">
+                          <span className="text-[11px] font-bold text-emerald-900 flex items-center gap-1">
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> Target Terpenuhi
+                          </span>
+                          <span className="font-black text-emerald-950 text-[11px]">
+                            {current}/{target} {sample.unitContent || 'VT'}
+                          </span>
+                        </div>
+
+                        {/* Footer actions */}
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-200/80 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setDetailSample(sample)}
+                            className="rounded-lg px-2 py-1 text-[11px] font-bold text-zinc-700 hover:bg-zinc-200 transition-colors cursor-pointer"
+                          >
+                            Detail
                           </button>
-                        )}
+
+                          {!isInvestor && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setProgressModalSample(sample);
+                                  setNewCompletedCount(sample.completedContent || 0);
+                                }}
+                                title="Update VT"
+                                className="rounded-lg px-2 py-1 text-[11px] font-bold text-orange-700 hover:bg-orange-100 transition-colors cursor-pointer"
+                              >
+                                Ubah VT
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditSample(sample)}
+                                title="Edit sampel"
+                                className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-800 transition-colors cursor-pointer"
+                              >
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1343,6 +1613,23 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       ) : (
         /* ================= KATALOG MASTER PRODUK (products) ================= */
         <div className="space-y-4">
+          {/* Master product search bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900 p-4 rounded-2xl border border-zinc-800 text-white">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-400" />
+              <input
+                type="text"
+                placeholder="Cari master produk..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 pl-10 pr-4 py-2 text-xs text-white placeholder-zinc-500 focus:outline-hidden focus:border-indigo-500 font-medium"
+              />
+            </div>
+            <span className="text-xs font-bold text-indigo-300">
+              Total {filteredProducts.length} Produk Master
+            </span>
+          </div>
+
           <div className="flex items-center justify-between bg-indigo-50/70 border border-indigo-200 rounded-2xl px-4 py-3">
             <div>
               <h2 className="font-black text-sm text-zinc-900">
@@ -1538,14 +1825,101 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                 </div>
               )}
 
-              <div>
-                <label className="block font-bold text-zinc-700 mb-1">Foto Produk (URL Gambar)</label>
+              {/* Foto Produk */}
+              <div className="space-y-2">
+                <label className="block font-bold text-zinc-700">Foto Master Produk (Kamera / Galeri / URL)</label>
+                <input
+                  ref={productCameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setProductImageFile(file);
+                      setProductImagePreview(URL.createObjectURL(file));
+                      setProductImageRemoved(false);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+                <input
+                  ref={productGalleryInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setProductImageFile(file);
+                      setProductImagePreview(URL.createObjectURL(file));
+                      setProductImageRemoved(false);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+
+                {productImagePreview ? (
+                  <div className="space-y-2">
+                    <img
+                      src={productImagePreview}
+                      alt="Preview foto produk"
+                      className="w-full max-h-48 object-cover rounded-xl border border-zinc-300"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => productCameraInputRef.current?.click()}
+                        className="flex-1 rounded-xl border border-zinc-300 p-2 text-xs font-bold text-zinc-700"
+                      >
+                        📷 Ambil Ulang
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProductImageFile(null);
+                          setProductImagePreview('');
+                          setProductImageRemoved(true);
+                          setProductFormData({ ...productFormData, productImage: '' });
+                        }}
+                        className="flex-1 rounded-xl border border-red-300 bg-red-50 p-2 text-xs font-bold text-red-600"
+                      >
+                        Hapus
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => productCameraInputRef.current?.click()}
+                      className="rounded-xl border border-zinc-300 p-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
+                    >
+                      📷 AMBIL FOTO
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => productGalleryInputRef.current?.click()}
+                      className="rounded-xl border border-zinc-300 p-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
+                    >
+                      🖼️ PILIH DARI GALERI
+                    </button>
+                  </div>
+                )}
+
                 <input
                   type="text"
                   value={productFormData.productImage}
-                  onChange={(e) => setProductFormData({ ...productFormData, productImage: e.target.value })}
-                  placeholder="https://... / link foto produk"
-                  className="w-full rounded-xl border border-zinc-300 p-2.5"
+                  onChange={(e) => {
+                    setProductFormData({ ...productFormData, productImage: e.target.value });
+                    if (e.target.value && !productImageFile) {
+                      setProductImagePreview(e.target.value);
+                      setProductImageRemoved(false);
+                    }
+                  }}
+                  placeholder="Atau tempel URL gambar (https://...)"
+                  className="w-full rounded-xl border border-zinc-300 p-2 text-xs text-zinc-600"
                 />
               </div>
 
@@ -1744,18 +2118,27 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
 
                 {sampleImagePreview ? (
                   <div className="space-y-2">
-                    <img
-                      src={sampleImagePreview}
-                      alt="Preview foto sampel"
-                      className="w-full max-h-48 object-cover rounded-xl border border-zinc-300"
-                    />
-                    <div className="flex gap-2">
+                    <div className="relative group rounded-xl overflow-hidden border border-zinc-300 bg-zinc-100 flex items-center justify-center">
+                      <img
+                        src={sampleImagePreview}
+                        alt="Preview foto sampel"
+                        className="w-full max-h-52 object-contain"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
                         onClick={() => cameraInputRef.current?.click()}
-                        className="flex-1 rounded-xl border border-zinc-300 p-2 text-xs font-bold text-zinc-700"
+                        className="rounded-xl border border-zinc-300 bg-white p-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
                       >
-                        📷 Ambil Ulang
+                        📷 Kamera
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => galleryInputRef.current?.click()}
+                        className="rounded-xl border border-zinc-300 bg-white p-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
+                      >
+                        🖼️ Galeri
                       </button>
                       <button
                         type="button"
@@ -1763,10 +2146,11 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                           setSampleImageFile(null);
                           setSampleImagePreview('');
                           setSampleImageRemoved(true);
+                          setSampleFormData((prev) => ({ ...prev, productImage: '' }));
                         }}
-                        className="flex-1 rounded-xl border border-red-300 bg-red-50 p-2 text-xs font-bold text-red-600"
+                        className="rounded-xl border border-red-300 bg-red-50 p-2 text-xs font-bold text-red-600 hover:bg-red-100"
                       >
-                        Hapus
+                        🗑️ Hapus
                       </button>
                     </div>
                   </div>
@@ -1775,14 +2159,14 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
                     <button
                       type="button"
                       onClick={() => cameraInputRef.current?.click()}
-                      className="rounded-xl border border-zinc-300 p-2.5 text-xs font-bold text-zinc-700"
+                      className="rounded-xl border border-zinc-300 bg-white p-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
                     >
                       📷 AMBIL FOTO
                     </button>
                     <button
                       type="button"
                       onClick={() => galleryInputRef.current?.click()}
-                      className="rounded-xl border border-zinc-300 p-2.5 text-xs font-bold text-zinc-700"
+                      className="rounded-xl border border-zinc-300 bg-white p-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
                     >
                       🖼️ PILIH DARI GALERI
                     </button>
@@ -1980,50 +2364,168 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
       )}
 
       {/* ================= MODAL: QUICK UPDATE VT ================= */}
-      {progressModalSample && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-zinc-900 shadow-2xl border border-zinc-200">
-            <h3 className="text-base font-black text-zinc-900 mb-2 flex items-center gap-2">
-              <PlayCircle className="h-5 w-5 text-orange-600" />
-              Update Progress Output VT
-            </h3>
-            <p className="text-xs text-zinc-500 mb-4">{progressModalSample.productName}</p>
+      {progressModalSample && (() => {
+        const target = Number(progressModalSample.targetContent) || 1;
+        const current = Number(newCompletedCount) || 0;
+        const percent = Math.min(100, Math.round((current / target) * 100));
+        const photo = progressModalSample.sampleImage || progressModalSample.productImage || (progressModalSample as any).photoUrl;
 
-            <form onSubmit={handleUpdateProgressSubmit} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-zinc-700 mb-1">Jumlah Konten VT Selesai</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={progressModalSample.targetContent || 99}
-                  value={newCompletedCount}
-                  onChange={(e) => setNewCompletedCount(Number(e.target.value))}
-                  className="w-full rounded-xl border border-zinc-300 p-3 text-lg font-black text-center text-orange-600"
-                />
-                <span className="block text-[11px] text-zinc-400 mt-1 text-center">
-                  Target total: {progressModalSample.targetContent || 1} {progressModalSample.unitContent || 'VT'}
-                </span>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-md rounded-3xl bg-white p-6 text-zinc-900 shadow-2xl border border-zinc-200 space-y-4">
+              <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-orange-100 text-orange-600">
+                    <PlayCircle className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-zinc-900">
+                      Update Progres VT / Konten
+                    </h3>
+                    <p className="text-[11px] text-zinc-500 font-medium">
+                      Perbarui jumlah video/konten yang telah diproduksi
+                    </p>
+                  </div>
+                </div>
                 <button
                   type="button"
                   onClick={() => setProgressModalSample(null)}
-                  className="rounded-xl border border-zinc-200 px-4 py-2 font-bold text-zinc-600"
+                  className="rounded-full p-1.5 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors cursor-pointer"
                 >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-orange-600 hover:bg-orange-500 text-white px-5 py-2 font-black"
-                >
-                  Simpan Progress
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-            </form>
+
+              {/* Product Preview Card */}
+              <div className="flex items-center gap-3 bg-zinc-50 border border-zinc-200/80 rounded-2xl p-3">
+                {photo ? (
+                  <img
+                    src={photo}
+                    alt={progressModalSample.productName}
+                    referrerPolicy="no-referrer"
+                    className="h-16 w-16 rounded-xl object-cover border border-zinc-200 shrink-0 shadow-2xs"
+                  />
+                ) : (
+                  <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-zinc-200 text-zinc-400 shrink-0">
+                    <Package className="h-7 w-7" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <span className="inline-block px-1.5 py-0.2 text-[9px] font-black uppercase rounded bg-zinc-200 text-zinc-700">
+                    {progressModalSample.scope}
+                  </span>
+                  <h4 className="font-bold text-xs sm:text-sm text-zinc-900 truncate">
+                    {progressModalSample.productName}
+                  </h4>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                    <span>PIC: <strong className="text-zinc-700">{progressModalSample.employeeName || '-'}</strong></span>
+                    <span>•</span>
+                    <span className="text-indigo-600 font-semibold">{progressModalSample.accountName || 'Akun -'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handleUpdateProgressSubmit} className="space-y-4 text-xs">
+                {/* Stepper Input Counter */}
+                <div className="space-y-2">
+                  <label className="block font-bold text-zinc-700 text-center">
+                    Jumlah Konten Selesai ({progressModalSample.unitContent || 'VT'})
+                  </label>
+                  
+                  <div className="flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewCompletedCount(Math.max(0, current - 1))}
+                      disabled={current <= 0}
+                      className="h-12 w-12 rounded-2xl border border-zinc-200 bg-zinc-100 hover:bg-zinc-200 active:scale-95 disabled:opacity-40 disabled:pointer-events-none text-lg font-black text-zinc-700 transition-all flex items-center justify-center cursor-pointer"
+                    >
+                      -1
+                    </button>
+
+                    <input
+                      type="number"
+                      min={0}
+                      max={target}
+                      value={newCompletedCount}
+                      onChange={(e) => setNewCompletedCount(Math.max(0, Math.min(target, Number(e.target.value))))}
+                      className="w-28 h-12 rounded-2xl border-2 border-orange-400 bg-orange-50/50 p-2 text-2xl font-black text-center text-orange-700 focus:outline-hidden focus:border-orange-600 focus:ring-2 focus:ring-orange-200"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => setNewCompletedCount(Math.min(target, current + 1))}
+                      disabled={current >= target}
+                      className="h-12 w-12 rounded-2xl border border-orange-200 bg-orange-100 hover:bg-orange-200 active:scale-95 disabled:opacity-40 disabled:pointer-events-none text-lg font-black text-orange-700 transition-all flex items-center justify-center cursor-pointer"
+                    >
+                      +1
+                    </button>
+                  </div>
+
+                  {/* Quick Shortcut Buttons */}
+                  <div className="flex items-center justify-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setNewCompletedCount(0)}
+                      className="px-2.5 py-1 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold text-[11px] transition-colors cursor-pointer"
+                    >
+                      Reset (0)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewCompletedCount(target)}
+                      className="px-3 py-1 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-black text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <Check className="h-3 w-3" /> Target Terpenuhi ({target} {progressModalSample.unitContent || 'VT'})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Progress Preview */}
+                <div className="space-y-1.5 bg-zinc-50 border border-zinc-200/80 rounded-2xl p-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-[11px] font-bold text-zinc-600">
+                      Status Progres:
+                    </span>
+                    <span className={`font-black text-xs ${percent >= 100 ? 'text-emerald-700' : 'text-orange-700'}`}>
+                      {current} / {target} {progressModalSample.unitContent || 'VT'} ({percent}%)
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full rounded-full bg-zinc-200 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${
+                        percent >= 100 ? 'bg-emerald-500' : 'bg-orange-500'
+                      }`}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                  {percent >= 100 && (
+                    <p className="text-[11px] font-bold text-emerald-700 text-center pt-0.5">
+                      🎉 Sampel ini akan otomatis dipindahkan ke kolom TARGET TERPENUHI!
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
+                  <button
+                    type="button"
+                    onClick={() => setProgressModalSample(null)}
+                    className="rounded-2xl border border-zinc-200 px-4 py-2.5 font-bold text-zinc-600 hover:bg-zinc-100 transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white px-5 py-2.5 font-black shadow-md shadow-orange-500/20 active:scale-95 transition-all cursor-pointer text-center flex items-center justify-center gap-1.5"
+                  >
+                    <Check className="h-4 w-4" />
+                    <span>Simpan Progres</span>
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ================= MODAL: DETAIL SAMPEL ================= */}
       {detailSample && (
@@ -2037,9 +2539,9 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
             </div>
 
             <div className="space-y-3 text-xs">
-              {detailSample.sampleImage && (
+              {(detailSample.sampleImage || detailSample.productImage || (detailSample as any).photoUrl) && (
                 <img
-                  src={detailSample.sampleImage}
+                  src={detailSample.sampleImage || detailSample.productImage || (detailSample as any).photoUrl}
                   alt="Foto sampel"
                   className="w-full max-h-48 object-cover rounded-xl border border-zinc-200 mb-1"
                 />
@@ -2153,6 +2655,13 @@ export const DatabaseSampelPage: React.FC<DatabaseSampelPageProps> = ({
             </div>
 
             <div className="space-y-3 text-xs">
+              {(detailProduct.productImage || (detailProduct as any).photoUrl) && (
+                <img
+                  src={detailProduct.productImage || (detailProduct as any).photoUrl}
+                  alt="Foto master produk"
+                  className="w-full max-h-48 object-cover rounded-xl border border-zinc-200 mb-1"
+                />
+              )}
               <div className="flex justify-between border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Nama Produk:</span>
                 <strong className="text-zinc-900 font-bold">{detailProduct.productName}</strong>

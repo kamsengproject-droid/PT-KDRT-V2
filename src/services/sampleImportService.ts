@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 import {
   collection,
   doc,
@@ -28,6 +29,109 @@ import { createSample, updateSample, SAMPLES_COLLECTION } from './sampleService'
 import { tanggalHariIni, formatRupiah } from '../utils/formatters';
 
 export const SAMPLE_IMPORT_LOGS_COLLECTION = 'sampleImportLogs';
+
+/**
+ * Ekstrak gambar yang disisipkan (embedded drawings / images) langsung dari file .xlsx
+ */
+export async function extractEmbeddedImagesFromXlsx(buffer: ArrayBuffer): Promise<Map<number, string>> {
+  const rowImageMap = new Map<number, string>();
+  try {
+    const zip = await JSZip.loadAsync(buffer);
+
+    // Cari drawing files di xl/drawings/
+    const drawingFiles = Object.keys(zip.files).filter(
+      (path) => path.startsWith('xl/drawings/drawing') && path.endsWith('.xml')
+    );
+
+    for (const drawingPath of drawingFiles) {
+      const parts = drawingPath.split('/');
+      const fileName = parts.pop() || '';
+      const dirPath = parts.join('/');
+      const relsPath = `${dirPath}/_rels/${fileName}.rels`;
+
+      const drawingXmlText = await zip.file(drawingPath)?.async('text');
+      const relsXmlText = await zip.file(relsPath)?.async('text');
+
+      if (!drawingXmlText || !relsXmlText) continue;
+
+      // Parse relationship IDs ke target file media di zip
+      const relsDoc = new DOMParser().parseFromString(relsXmlText, 'application/xml');
+      const relElements = relsDoc.getElementsByTagName('Relationship');
+      const relMap = new Map<string, string>();
+      for (let i = 0; i < relElements.length; i++) {
+        const id = relElements[i].getAttribute('Id');
+        const target = relElements[i].getAttribute('Target');
+        if (id && target) {
+          // Normalize path: e.g. "../media/image1.png" -> "xl/media/image1.png"
+          const normalized = target.startsWith('..') ? target.replace(/^\.\.\//, 'xl/') : target.startsWith('/') ? target.slice(1) : `xl/drawings/${target}`;
+          relMap.set(id, normalized);
+        }
+      }
+
+      // Parse drawing XML untuk posisi baris
+      const drawingDoc = new DOMParser().parseFromString(drawingXmlText, 'application/xml');
+      const anchors = [
+        ...Array.from(drawingDoc.getElementsByTagName('xdr:twoCellAnchor')),
+        ...Array.from(drawingDoc.getElementsByTagName('xdr:oneCellAnchor')),
+        ...Array.from(drawingDoc.getElementsByTagName('twoCellAnchor')),
+        ...Array.from(drawingDoc.getElementsByTagName('oneCellAnchor')),
+      ];
+
+      for (const anchor of anchors) {
+        const fromEl = anchor.getElementsByTagName('xdr:from')[0] || anchor.getElementsByTagName('from')[0];
+        if (!fromEl) continue;
+
+        const rowEl = fromEl.getElementsByTagName('xdr:row')[0] || fromEl.getElementsByTagName('row')[0];
+        if (!rowEl || !rowEl.textContent) continue;
+
+        const rowIdx = parseInt(rowEl.textContent.trim(), 10);
+        if (isNaN(rowIdx)) continue;
+
+        // Cari embed ID gambar
+        const blipEl = anchor.getElementsByTagName('a:blip')[0] || anchor.getElementsByTagName('blip')[0];
+        if (!blipEl) continue;
+
+        const embedId =
+          blipEl.getAttribute('r:embed') ||
+          blipEl.getAttribute('embed') ||
+          blipEl.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
+
+        if (!embedId) continue;
+
+        const mediaPath = relMap.get(embedId);
+        if (!mediaPath) continue;
+
+        // Cari file media di zip (case-insensitive fallback)
+        let mediaFile = zip.file(mediaPath);
+        if (!mediaFile) {
+          const lowerPath = mediaPath.toLowerCase();
+          const matchKey = Object.keys(zip.files).find((k) => k.toLowerCase() === lowerPath);
+          if (matchKey) mediaFile = zip.file(matchKey);
+        }
+
+        if (!mediaFile) continue;
+
+        const lower = mediaPath.toLowerCase();
+        const mimeType = lower.endsWith('.png')
+          ? 'image/png'
+          : lower.endsWith('.webp')
+          ? 'image/webp'
+          : lower.endsWith('.gif')
+          ? 'image/gif'
+          : 'image/jpeg';
+
+        const base64Data = await mediaFile.async('base64');
+        const dataUrl = `data:${mimeType};base64,${base64Data}`;
+        if (!rowImageMap.has(rowIdx)) {
+          rowImageMap.set(rowIdx, dataUrl);
+        }
+      }
+    }
+  } catch (zipErr) {
+    console.warn('Notice parsing embedded drawings from XLSX:', zipErr);
+  }
+  return rowImageMap;
+}
 
 /**
  * Normalisasi format mata uang / angka dari string spreadsheet
@@ -279,6 +383,34 @@ export function matchHeaderKey(rawHeader: string): string | null {
     return 'paymentMethod';
   }
 
+  // 12. Foto / Gambar Sampel (URL / Link / Base64 / Image)
+  if (
+    [
+      'foto',
+      'foto sampel',
+      'foto produk',
+      'foto fisik',
+      'gambar',
+      'gambar sampel',
+      'gambar produk',
+      'link foto',
+      'link gambar',
+      'url foto',
+      'url gambar',
+      'image',
+      'image url',
+      'photo',
+      'photo url',
+      'photo link',
+      'sample image',
+      'product image',
+      'img',
+      'picture',
+    ].includes(clean)
+  ) {
+    return 'photoUrl';
+  }
+
   return null;
 }
 
@@ -304,6 +436,9 @@ export async function parseSpreadsheetBuffer(
   existingSamples: AffiliateSample[],
   targetSheetName?: string
 ): Promise<ParsedWorksheetResult> {
+  // Ekstrak foto / embedded image dari file .xlsx jika ada
+  const embeddedImageMap = await extractEmbeddedImagesFromXlsx(buffer);
+
   const workbook = XLSX.read(buffer, {
     type: 'array',
     cellDates: true,
@@ -388,6 +523,14 @@ export async function parseSpreadsheetBuffer(
     const productName = String(rowObj.productName || '').trim();
     const color = String(rowObj.color || '').trim();
     const size = String(rowObj.size || '').trim();
+
+    // Ambil foto dari kolom URL/Link atau dari embedded image drawing di baris r
+    let photoUrl = '';
+    if (rowObj.photoUrl && String(rowObj.photoUrl).trim()) {
+      photoUrl = String(rowObj.photoUrl).trim();
+    } else if (embeddedImageMap.has(r)) {
+      photoUrl = embeddedImageMap.get(r) || '';
+    }
 
     const productPrice = parseCurrencyOrNumber(rowObj.productPrice);
     const shippingCost = parseCurrencyOrNumber(rowObj.shippingCost);
@@ -492,6 +635,9 @@ export async function parseSpreadsheetBuffer(
       orderNumber,
       paymentMethod: paymentInfo.normalized,
       paymentMethodRaw: paymentInfo.raw,
+      photoUrl,
+      productImage: photoUrl,
+      sampleImage: photoUrl,
       status,
       validationIssues,
       duplicateSampleId,
@@ -552,6 +698,7 @@ export function generateSampleImportTemplate(): Blob {
     'Total Bayar',
     'No Pesanan',
     'Metode Pembayaran',
+    'Foto Sampel',
   ];
 
   const sampleRows = [
@@ -567,6 +714,7 @@ export function generateSampleImportTemplate(): Blob {
       92199,
       '585323861754939211',
       'DANA',
+      'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=500&q=80',
     ],
     [
       2,
@@ -580,6 +728,7 @@ export function generateSampleImportTemplate(): Blob {
       130000,
       '585323861754939212',
       'COD',
+      'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=500&q=80',
     ],
     [
       3,
@@ -593,6 +742,7 @@ export function generateSampleImportTemplate(): Blob {
       73000,
       '585323861754939213',
       'TRANSFER',
+      'https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=500&q=80',
     ],
   ];
 
@@ -612,6 +762,7 @@ export function generateSampleImportTemplate(): Blob {
     { wch: 16 }, // Total Bayar
     { wch: 24 }, // No Pesanan
     { wch: 18 }, // Metode Pembayaran
+    { wch: 30 }, // Foto Sampel
   ];
 
   const wb = XLSX.utils.book_new();
@@ -725,6 +876,13 @@ export async function executeSpreadsheetImport(
             orderNumber: row.orderNumber,
             paymentMethod: row.paymentMethod,
             paymentMethodRaw: row.paymentMethodRaw,
+            ...(row.photoUrl
+              ? {
+                  photoUrl: row.photoUrl,
+                  productImage: row.photoUrl,
+                  sampleImage: row.photoUrl,
+                }
+              : {}),
             source: 'spreadsheet_import',
             importBatchId: batchId,
             importFileName: fileName,
@@ -757,7 +915,9 @@ export async function executeSpreadsheetImport(
         productId: '', // Linked into master product cleanly
         productName: row.productName,
         productUrl: '',
-        productImage: '',
+        productImage: row.photoUrl || '',
+        sampleImage: row.photoUrl || '',
+        photoUrl: row.photoUrl || '',
         samplePrice: row.productPrice || row.totalPaid,
         productPriceVal: row.productPrice,
         shippingCost: row.shippingCost,

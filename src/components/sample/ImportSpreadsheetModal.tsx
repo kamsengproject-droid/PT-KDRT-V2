@@ -466,7 +466,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({
                   <span>Sistem Cerdas Pembaca Spreadsheet Sampel PT KDRT V2</span>
                 </div>
                 <p className="text-emerald-800 leading-relaxed">
-                  Sistem membaca header secara otomatis (Seller, Nama Produk, Warna, Ukuran, Harga Produk, Ongkir, Diskon, Total Bayar, No Pesanan, Metode Pembayaran) dan memvalidasi kalkulasi secara instan.
+                  Sistem membaca header otomatis (Seller, Nama Produk, Warna, Ukuran, Harga Produk, Ongkir, Diskon, Total Bayar, No Pesanan, Metode Pembayaran, <b>Foto Sampel</b>) dan memvalidasi data seketika. <b>Foto sampel dapat dibaca langsung dari URL link gambar ataupun gambar yang ditempel/disisipkan (embedded picture) di dalam file Excel (.xlsx).</b>
                 </p>
               </div>
 
@@ -792,6 +792,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({
                   <thead>
                     <tr className="border-b border-zinc-200 bg-zinc-100/80 font-black text-zinc-600 uppercase text-[10px] tracking-wider whitespace-nowrap">
                       <th className="px-3 py-3 text-center">No</th>
+                      <th className="px-2 py-3 text-center">Foto</th>
                       <th className="px-3 py-3">Seller / Toko</th>
                       <th className="px-3 py-3">Nama Produk</th>
                       <th className="px-2 py-3 text-center">Warna</th>
@@ -808,7 +809,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({
                   <tbody className="divide-y divide-zinc-100 text-zinc-800">
                     {filteredRows.length === 0 ? (
                       <tr>
-                        <td colSpan={12} className="px-4 py-8 text-center text-zinc-400">
+                        <td colSpan={13} className="px-4 py-8 text-center text-zinc-400">
                           Tidak ada baris data yang sesuai filter.
                         </td>
                       </tr>
@@ -831,6 +832,27 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({
                             {/* No */}
                             <td className="px-3 py-2.5 text-center font-bold text-zinc-400">
                               {row.sequenceNumber || row.rowNumber}
+                            </td>
+
+                            {/* Foto Sampel */}
+                            <td className="px-2 py-2.5 text-center whitespace-nowrap">
+                              {row.photoUrl ? (
+                                <div className="inline-flex items-center justify-center">
+                                  <img
+                                    src={row.photoUrl}
+                                    alt={row.productName}
+                                    referrerPolicy="no-referrer"
+                                    className="h-9 w-9 rounded-lg object-cover border border-zinc-200 shadow-2xs hover:scale-125 transition-transform bg-zinc-100"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                </div>
+                              ) : (
+                                <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-100 text-zinc-300 text-[10px]" title="Tidak ada foto">
+                                  📷
+                                </span>
+                              )}
                             </td>
 
                             {/* Seller */}

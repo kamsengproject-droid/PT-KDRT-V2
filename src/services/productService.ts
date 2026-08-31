@@ -78,7 +78,7 @@ export function subscribeProducts(
   );
 }
 
-// 2. Upload Product Photo to Firebase Storage
+// 2. Upload Product Photo to Firebase Storage with timeout safeguard
 export async function uploadProductPhoto(
   file: File,
   productTempId: string
@@ -95,15 +95,29 @@ export async function uploadProductPhoto(
   const storagePath = `products/${productTempId}_${timestamp}.jpg`;
   const storageRef = ref(storage, storagePath);
 
-  await uploadBytes(storageRef, compressed.blob, {
-    contentType: compressed.mimeType,
-    customMetadata: {
-      uploadedAt: new Date().toISOString(),
-      originalFileName: file.name,
-    },
-  });
+  let photoUrl = compressed.dataUrl;
+  try {
+    const uploadAction = (async () => {
+      await uploadBytes(storageRef, compressed.blob, {
+        contentType: compressed.mimeType,
+        customMetadata: {
+          uploadedAt: new Date().toISOString(),
+          originalFileName: file.name,
+        },
+      });
 
-  const photoUrl = await getDownloadURL(storageRef);
+      return await getDownloadURL(storageRef);
+    })();
+
+    photoUrl = await Promise.race([
+      uploadAction,
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('Storage upload timeout fallback')), 3500)
+      ),
+    ]);
+  } catch (storageErr) {
+    console.warn('Firebase Storage upload notice for product photo (fallback to compressed dataUrl):', storageErr);
+  }
 
   return {
     photoUrl,

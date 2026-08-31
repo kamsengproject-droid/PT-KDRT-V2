@@ -229,7 +229,7 @@ export const AddProductSampleModal: React.FC<AddProductSampleModalProps> = ({
       const finalScope: ScopeType = canChooseScope ? scope : 'SHARING';
 
       // 0. UPLOAD PHOTO TO FIREBASE STORAGE ONCE (IF FILE SELECTED)
-      let finalPhotoUrl = productImage && !productImage.startsWith('data:') ? productImage : '';
+      let finalPhotoUrl = productImage || '';
       let photoStoragePath = '';
       let photoSizeBytes = 0;
       let photoMimeType = '';
@@ -240,14 +240,15 @@ export const AddProductSampleModal: React.FC<AddProductSampleModalProps> = ({
         try {
           const tempId = 'sample_prod_' + Date.now();
           const uploaded = await uploadProductPhoto(selectedPhotoFile, tempId);
-          finalPhotoUrl = uploaded.photoUrl;
+          finalPhotoUrl = uploaded.photoUrl || productImage || '';
           photoStoragePath = uploaded.storagePath;
           photoSizeBytes = uploaded.photoSizeBytes;
           photoMimeType = uploaded.photoMimeType;
           photoWidth = uploaded.photoWidth;
           photoHeight = uploaded.photoHeight;
         } catch (uploadErr: any) {
-          console.warn('Gagal upload ke Firebase Storage, simpan tanpa foto:', uploadErr);
+          console.warn('Gagal upload ke Firebase Storage, simpan foto lokal:', uploadErr);
+          finalPhotoUrl = productImage || '';
         }
       }
 
@@ -300,6 +301,7 @@ export const AddProductSampleModal: React.FC<AddProductSampleModalProps> = ({
         productName: productName.trim(),
         productUrl: '',
         productImage: finalPhotoUrl || '',
+        sampleImage: finalPhotoUrl || '',
         samplePrice: numericSamplePrice,
         quantity: numericQty,
         totalCost: totalBelanjaSampel,

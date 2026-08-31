@@ -48,6 +48,7 @@ import {
   updateSampleContentProgress,
   recordSampleExpense,
   deleteSample,
+  uploadSampleImage,
 } from '../services/sampleService';
 import { subscribeProducts } from '../services/productService';
 import { subscribeAccounts } from '../services/accountService';
@@ -96,6 +97,13 @@ export const SampelPage: React.FC<SampelPageProps> = ({
   const [actionError, setActionError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [deletingSample, setDeletingSample] = useState<AffiliateSample | null>(null);
+
+  // Photo state & refs for Sample modal
+  const cameraInputRef = React.useRef<HTMLInputElement>(null);
+  const galleryInputRef = React.useRef<HTMLInputElement>(null);
+  const [sampleImageFile, setSampleImageFile] = useState<File | null>(null);
+  const [sampleImagePreview, setSampleImagePreview] = useState<string>('');
+  const [sampleImageRemoved, setSampleImageRemoved] = useState<boolean>(false);
 
   // Form State
   const [formData, setFormData] = useState<{
@@ -267,12 +275,13 @@ export const SampelPage: React.FC<SampelPageProps> = ({
     const defaultEmployee = employees[0];
 
     const initialPrice = defaultProduct ? defaultProduct.productPrice : 0;
+    const initialImg = defaultProduct ? defaultProduct.productImage || (defaultProduct as any).photoUrl || '' : '';
 
     setFormData({
       productId: defaultProduct ? defaultProduct.id || '' : '',
       productName: defaultProduct ? defaultProduct.productName : '',
       productUrl: defaultProduct ? defaultProduct.productUrl || '' : '',
-      productImage: defaultProduct ? defaultProduct.productImage || defaultProduct.photoUrl || '' : '',
+      productImage: initialImg,
       samplePrice: initialPrice,
       purchaseDate: tanggalHariIni(),
       quantity: 1,
@@ -288,6 +297,9 @@ export const SampelPage: React.FC<SampelPageProps> = ({
       autoCreateTask: true,
       notes: '',
     });
+    setSampleImageFile(null);
+    setSampleImagePreview(initialImg);
+    setSampleImageRemoved(false);
     setActionError(null);
     setIsModalOpen(true);
   };
@@ -297,12 +309,13 @@ export const SampelPage: React.FC<SampelPageProps> = ({
     setEditingSample(null);
     const defaultAccount = accounts.find((a) => p.accountIds?.includes(a.id || '')) || accounts[0];
     const defaultEmployee = employees[0];
+    const prodImg = p.productImage || (p as any).photoUrl || '';
 
     setFormData({
       productId: p.id || '',
       productName: p.productName,
       productUrl: p.productUrl || '',
-      productImage: p.productImage || p.photoUrl || '',
+      productImage: prodImg,
       samplePrice: p.productPrice,
       purchaseDate: tanggalHariIni(),
       quantity: 1,
@@ -318,6 +331,9 @@ export const SampelPage: React.FC<SampelPageProps> = ({
       autoCreateTask: true,
       notes: '',
     });
+    setSampleImageFile(null);
+    setSampleImagePreview(prodImg);
+    setSampleImageRemoved(false);
     setActionError(null);
     setIsModalOpen(true);
   };
@@ -325,11 +341,12 @@ export const SampelPage: React.FC<SampelPageProps> = ({
   // Open Edit Modal
   const handleOpenEdit = (sample: AffiliateSample) => {
     setEditingSample(sample);
+    const sampleImg = sample.sampleImage || sample.productImage || (sample as any).photoUrl || '';
     setFormData({
       productId: sample.productId,
       productName: sample.productName,
       productUrl: sample.productUrl || '',
-      productImage: sample.productImage || '',
+      productImage: sampleImg,
       samplePrice: sample.samplePrice,
       purchaseDate: sample.purchaseDate || tanggalHariIni(),
       quantity: sample.quantity,
@@ -345,6 +362,9 @@ export const SampelPage: React.FC<SampelPageProps> = ({
       autoCreateTask: false,
       notes: sample.notes || '',
     });
+    setSampleImageFile(null);
+    setSampleImagePreview(sampleImg);
+    setSampleImageRemoved(false);
     setActionError(null);
     setIsModalOpen(true);
   };
@@ -355,12 +375,13 @@ export const SampelPage: React.FC<SampelPageProps> = ({
     if (selected) {
       const price = selected.productPrice;
       const qty = formData.quantity || 1;
+      const prodImg = selected.productImage || (selected as any).photoUrl || '';
       setFormData((prev) => ({
         ...prev,
         productId: selected.id || '',
         productName: selected.productName,
         productUrl: selected.productUrl || '',
-        productImage: selected.productImage || selected.photoUrl || '',
+        productImage: prodImg,
         samplePrice: price,
         totalCost: price * qty,
         scope: selected.scope,
@@ -369,6 +390,9 @@ export const SampelPage: React.FC<SampelPageProps> = ({
           (selected.accountIds && selected.accountIds[0]) ||
           prev.accountId,
       }));
+      setSampleImageFile(null);
+      setSampleImagePreview(prodImg);
+      setSampleImageRemoved(false);
     }
   };
 
@@ -399,6 +423,18 @@ export const SampelPage: React.FC<SampelPageProps> = ({
     const selectedEmployee = employees.find((e) => e.id === formData.employeeId);
 
     try {
+      let sampleImageUrl: string | undefined = undefined;
+      if (sampleImageFile) {
+        const tempId = editingSample?.id || `temp_${Date.now()}`;
+        sampleImageUrl = await uploadSampleImage(sampleImageFile, tempId);
+      } else if (sampleImageRemoved) {
+        sampleImageUrl = '';
+      } else if (formData.productImage) {
+        sampleImageUrl = formData.productImage;
+      }
+
+      const finalPhoto = sampleImageUrl !== undefined ? sampleImageUrl : (formData.productImage || '');
+
       if (editingSample && editingSample.id) {
         await updateSample(
           editingSample.id,
@@ -407,7 +443,9 @@ export const SampelPage: React.FC<SampelPageProps> = ({
             productId: formData.productId,
             productName: formData.productName,
             productUrl: formData.productUrl,
-            productImage: formData.productImage,
+            productImage: finalPhoto,
+            sampleImage: finalPhoto,
+            photoUrl: finalPhoto,
             samplePrice: Number(formData.samplePrice),
             quantity: Number(formData.quantity),
             totalCost: Number(formData.totalCost),
@@ -433,7 +471,9 @@ export const SampelPage: React.FC<SampelPageProps> = ({
             productId: formData.productId,
             productName: formData.productName,
             productUrl: formData.productUrl,
-            productImage: formData.productImage,
+            productImage: finalPhoto,
+            sampleImage: finalPhoto,
+            photoUrl: finalPhoto,
             samplePrice: Number(formData.samplePrice),
             quantity: Number(formData.quantity),
             totalCost: Number(formData.totalCost),
@@ -1174,6 +1214,102 @@ export const SampelPage: React.FC<SampelPageProps> = ({
                   onChange={(e) => setFormData({ ...formData, productName: e.target.value })}
                   className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
+              </div>
+
+              {/* Foto Fisik Sampel */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
+                  Foto Fisik Sampel
+                </label>
+
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setSampleImageFile(file);
+                      setSampleImagePreview(URL.createObjectURL(file));
+                      setSampleImageRemoved(false);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+                <input
+                  ref={galleryInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setSampleImageFile(file);
+                      setSampleImagePreview(URL.createObjectURL(file));
+                      setSampleImageRemoved(false);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+
+                {sampleImagePreview ? (
+                  <div className="space-y-2">
+                    <div className="relative group rounded-xl overflow-hidden border border-slate-300 bg-slate-100 flex items-center justify-center max-h-48">
+                      <img
+                        src={sampleImagePreview}
+                        alt="Preview foto sampel"
+                        className="w-full max-h-48 object-contain"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => cameraInputRef.current?.click()}
+                        className="rounded-lg border border-slate-300 bg-white p-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                      >
+                        📷 Kamera
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => galleryInputRef.current?.click()}
+                        className="rounded-lg border border-slate-300 bg-white p-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                      >
+                        🖼️ Galeri
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSampleImageFile(null);
+                          setSampleImagePreview('');
+                          setSampleImageRemoved(true);
+                          setFormData((prev) => ({ ...prev, productImage: '' }));
+                        }}
+                        className="rounded-lg border border-red-300 bg-red-50 p-2 text-xs font-bold text-red-600 hover:bg-red-100 transition"
+                      >
+                        🗑️ Hapus
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      className="rounded-lg border border-slate-300 bg-white p-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    >
+                      📷 AMBIL FOTO
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => galleryInputRef.current?.click()}
+                      className="rounded-lg border border-slate-300 bg-white p-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    >
+                      🖼️ PILIH DARI GALERI
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Harga Sampel & Jumlah Qty */}

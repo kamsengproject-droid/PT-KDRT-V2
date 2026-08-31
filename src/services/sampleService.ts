@@ -31,25 +31,52 @@ import { tanggalHariIni } from '../utils/formatters';
 
 export const SAMPLES_COLLECTION = 'samples';
 
+function cleanUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  const result: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 // Upload sample photo to Firebase Storage. Reuses the same compression helper
 // (compressImageFile) and upload pattern already used by productService's
-// uploadProductPhoto — just a different storage folder, since this is a
-// distinct photo (sample condition photo) from the master product photo.
+// uploadProductPhoto — with a strict 3.5s timeout so saving NEVER hangs/stags.
 export async function uploadSampleImage(file: File, sampleTempId: string): Promise<string> {
   const compressed = await compressImageFile(file, 1000, 1000, 0.82);
   const timestamp = Date.now();
   const storagePath = `samples/${sampleTempId}_${timestamp}.jpg`;
   const storageRef = ref(storage, storagePath);
 
-  await uploadBytes(storageRef, compressed.blob, {
-    contentType: compressed.mimeType,
-    customMetadata: {
-      uploadedAt: new Date().toISOString(),
-      originalFileName: file.name,
-    },
-  });
+  try {
+    const uploadAction = (async () => {
+      await uploadBytes(storageRef, compressed.blob, {
+        contentType: compressed.mimeType,
+        customMetadata: {
+          uploadedAt: new Date().toISOString(),
+          originalFileName: file.name,
+        },
+      });
 
-  return getDownloadURL(storageRef);
+      return await getDownloadURL(storageRef);
+    })();
+
+    // 3.5s timeout safeguard: if storage network hangs, instantly return compressed dataUrl
+    const url = await Promise.race([
+      uploadAction,
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('Storage upload timeout fallback')), 3500)
+      ),
+    ]);
+
+    return url;
+  } catch (storageErr) {
+    console.warn('Firebase Storage upload notice (using compressed dataUrl fallback):', storageErr);
+    // Fallback to high-quality compressed dataUrl so the image is never lost even if storage is offline
+    return compressed.dataUrl;
+  }
 }
 
 /**
@@ -118,12 +145,12 @@ export async function syncSampleToDailyTask(
 
   await setDoc(
     taskRef,
-    {
+    cleanUndefined({
       ...taskPayload,
       createdAt: serverTimestamp(),
       createdBy: actorUid,
       createdByName: actorName,
-    },
+    }),
     { merge: true }
   );
 
@@ -227,8 +254,14 @@ export async function createSample(
   const targetContent = Number(sampleData.targetContent) || 3;
   const completedContent = Number(sampleData.completedContent) || 0;
 
-  const payload: any = {
+  // Harmonize photo fields: ensure sampleImage, productImage, and photoUrl are synced
+  const resolvedPhoto = sampleData.sampleImage || sampleData.productImage || (sampleData as any).photoUrl || '';
+
+  const rawPayload: any = {
     ...sampleData,
+    sampleImage: resolvedPhoto,
+    productImage: resolvedPhoto,
+    photoUrl: resolvedPhoto,
     samplePrice,
     quantity,
     totalCost,
@@ -244,6 +277,8 @@ export async function createSample(
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
+
+  const payload = cleanUndefined(rawPayload);
 
   try {
     console.time('[SAMPLE_SAVE_TOTAL]');
@@ -275,7 +310,7 @@ export async function createSample(
         ? (async () => {
             console.time('[SAMPLE_EXPENSE_WRITE]');
             try {
-              await recordSampleExpense(sampleId, { ...payload, id: sampleId }, currentUserId, currentUserName, true);
+              await recordSampleExpense(sampleId, { ...payload, id: sampleId } as AffiliateSample, currentUserId, currentUserName, true);
             } catch (expErr: any) {
               console.warn('Auto expense recording notice:', expErr.message);
             } finally {
@@ -331,8 +366,29 @@ export async function updateSample(
   const quantity = updates.quantity !== undefined ? Number(updates.quantity) : currentSample.quantity;
   const totalCost = samplePrice * quantity;
 
-  const payload: any = {
+  // Harmonize photo fields if any photo property was updated
+  let photoUpdates: Record<string, string> = {};
+  if (
+    updates.sampleImage !== undefined ||
+    updates.productImage !== undefined ||
+    (updates as any).photoUrl !== undefined
+  ) {
+    const newPhoto =
+      updates.sampleImage !== undefined
+        ? updates.sampleImage
+        : updates.productImage !== undefined
+        ? updates.productImage
+        : (updates as any).photoUrl || '';
+    photoUpdates = {
+      sampleImage: newPhoto,
+      productImage: newPhoto,
+      photoUrl: newPhoto,
+    };
+  }
+
+  const rawPayload: any = {
     ...updates,
+    ...photoUpdates,
     samplePrice,
     quantity,
     totalCost,
@@ -340,6 +396,8 @@ export async function updateSample(
     updatedBy: currentUserId,
     updatedByName: currentUserName,
   };
+
+  const payload = cleanUndefined(rawPayload);
 
   try {
     console.time('[SAMPLE_UPDATE_TOTAL]');
@@ -349,10 +407,14 @@ export async function updateSample(
     await updateDoc(docRef, payload);
     console.log('[SAMPLE_SAMPLE_WRITE]', { id });
 
-    // If the sample photo was replaced or removed, clean up the old Storage object
-    // after the Firestore URL has been updated. A cleanup failure must never roll back
-    // an otherwise successful sample update.
-    if (currentSample.sampleImage && Object.prototype.hasOwnProperty.call(updates, 'sampleImage') && updates.sampleImage !== currentSample.sampleImage) {
+    // If the sample photo was replaced or removed, clean up old Firebase Storage object safely
+    if (
+      currentSample.sampleImage &&
+      typeof currentSample.sampleImage === 'string' &&
+      (currentSample.sampleImage.startsWith('gs://') || currentSample.sampleImage.includes('firebasestorage.googleapis.com')) &&
+      Object.prototype.hasOwnProperty.call(updates, 'sampleImage') &&
+      updates.sampleImage !== currentSample.sampleImage
+    ) {
       try {
         await deleteObject(ref(storage, currentSample.sampleImage));
       } catch (cleanupErr) {
@@ -515,7 +577,7 @@ export async function syncSampleFinancialTransaction(
     if (sample.orderNumber) noteParts.push(`No Pesanan: ${sample.orderNumber}`);
     if (sample.notes) noteParts.push(sample.notes);
 
-    const txData = {
+    const txData = cleanUndefined({
       id: deterministicId,
       transactionId: deterministicId,
       type: 'EXPENSE',
@@ -537,7 +599,7 @@ export async function syncSampleFinancialTransaction(
       updatedAt: serverTimestamp(),
       createdBy: currentUserId,
       createdByName: currentUserName,
-    };
+    });
 
     await setDoc(txRef, txData, { merge: true });
 

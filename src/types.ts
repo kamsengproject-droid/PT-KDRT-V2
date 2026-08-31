@@ -761,6 +761,7 @@ export interface AffiliateSample {
   importedBy?: string; // User ID yang mengimport
   importedByName?: string; // Nama User yang mengimport
   sampleImage?: string; // Foto kondisi fisik sampel (BEDA dari productImage / foto produk master)
+  photoUrl?: string; // Alias kompatibilitas foto sampel
 
   // Penataan Lokasi Fisik Sampel (Rak / Hanger / Lemari)
   locationId?: string;
@@ -1501,6 +1502,11 @@ export interface SpreadsheetSampleRow {
   paymentMethod: string;
   paymentMethodRaw: string;
   
+  // Photo / Gambar Sampel from Excel
+  photoUrl?: string;
+  sampleImage?: string;
+  productImage?: string;
+
   // Validation status
   status: ImportRowValidationStatus;
   validationIssues: string[];
