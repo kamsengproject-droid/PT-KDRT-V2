@@ -880,11 +880,6 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
               <span className="font-semibold text-zinc-300">
                 {selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}
               </span>
-              {selectedMonth && (
-                <span className="text-zinc-500 text-[11px]">
-                  All-time: {formatRupiah(globalCalculations.totalIn + globalCalculations.totalOpening)}
-                </span>
-              )}
             </div>
           </div>
         </div>
@@ -910,11 +905,6 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
               <span className="font-semibold text-zinc-300">
                 {selectedMonth ? formatBulanTahun(selectedMonth) : 'Semua Periode'}
               </span>
-              {selectedMonth && (
-                <span className="text-zinc-500 text-[11px]">
-                  All-time: {formatRupiah(globalCalculations.totalOut)}
-                </span>
-              )}
             </div>
           </div>
         </div>
@@ -969,12 +959,6 @@ export const KeuanganPage: React.FC<KeuanganPageProps> = ({ onBackToPortal }) =>
                   ? 'Surplus (Profit)'
                   : 'Defisit (Loss)'}
               </span>
-              {selectedMonth && (
-                <span className="text-zinc-500 text-[11px]">
-                  All-time: {globalCalculations.totalIn - globalCalculations.totalOut >= 0 ? '+' : ''}
-                  {formatRupiah(globalCalculations.totalIn - globalCalculations.totalOut)}
-                </span>
-              )}
             </div>
           </div>
         </div>
